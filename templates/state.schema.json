@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "sdd/state.schema.json",
+  "title": "SDD ledger",
+  "description": "Tek gerçek kaynak. tasks.md bundan render edilir. Tier 0/Tier 1 sonuçları, resume bilgisi ve stage durumları buraya yazılır. Checkbox ile bu ledger çelişirse: biri 'done' diyorsa done kabul edilir.",
+  "type": "object",
+  "required": ["version", "spec_id", "stages", "tasks"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Şema sürümü. Workflow güncellenince migrasyon için.",
+      "const": 1
+    },
+    "spec_id": {
+      "type": "string",
+      "description": "Bu ledger'ın ait olduğu spec/feature kimliği (ör. klasör adı)."
+    },
+    "workflow_version": {
+      "type": "string",
+      "description": "Bu ledger'ı üreten workflow reposu sürümü (git tag). İkinci projeye geçince önem kazanır."
+    },
+    "stages": {
+      "type": "object",
+      "description": "Stage başına durum. Üst bir stage yeniden çalışınca alttakiler 'stale' işaretlenir.",
+      "properties": {
+        "spec":      { "$ref": "#/$defs/stage" },
+        "plan":      { "$ref": "#/$defs/stage" },
+        "tasks":     { "$ref": "#/$defs/stage" },
+        "analyze":   { "$ref": "#/$defs/stage" },
+        "implement": { "$ref": "#/$defs/stage" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/stage" }
+    },
+    "gate_baseline": {
+      "type": "object",
+      "description": "Loop başlamadan ölçülen 'zaten kırık' durumu. Sadece buna EKLENEN yeni hatalar suç sayılır. Sıfır projede boştur, script'ler geldikçe zenginleşir.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "available": { "type": "boolean", "description": "Komut projede tanımlı mı." },
+          "passing":   { "type": "boolean", "description": "Baseline'da geçiyor muydu." },
+          "measured_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Her task bir kayıt. tasks.md bu diziden render edilir.",
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_started", "running", "completed", "stale", "interrupted"],
+          "description": "stale = üst stage yeniden çalıştığı için bayat; yeniden üretilmeli. interrupted = yarıda kaldı (ör. limit), resume edilebilir."
+        },
+        "agent":       { "type": "string", "description": "Bu çalıştırmada kullanılan sağlayıcı." },
+        "model":       { "type": "string" },
+        "effort":      { "type": "string" },
+        "session_id":  { "type": ["string", "null"], "description": "Sağlayıcı resume kimliği (varsa). Yoksa resume = stage'i baştan çalıştır." },
+        "started_at":  { "type": ["string", "null"], "format": "date-time" },
+        "finished_at": { "type": ["string", "null"], "format": "date-time" },
+        "log_path":    { "type": ["string", "null"], "description": ".sdd/logs/ altındaki çalışma kaydı." }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "title", "status", "attempts"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Task kimliği (ör. T001). ASLA yeniden numaralandırılmaz. Ledger'ın anahtarı budur.",
+          "pattern": "^T[0-9]{3,}$"
+        },
+        "title": {
+          "type": "string",
+          "description": "tasks.md'deki serbest metin (ör. 'Add package scripts ... in web-app/package.json')."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "done", "blocked", "superseded", "manual"],
+          "description": "pending=henüz yapılmadı, done=yapıldı, blocked=denendi ve max_attempts'e ulaştı, superseded=başka task'la değiştirildi (bölündü), manual=otonom loop dışında insan gerektirir."
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Kaç kez denendi. Blocked bir task'ı yeniden yazarken bunu 0'a çekmek gerekir, yoksa ilk turda yine blocked olur."
+        },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "OPSİYONEL. Task'ın dokunması beklenen dosyalar. Tier 0'ın 'doğru dosyalara mı dokunuldu' UYARISI için. Yoksa o kontrol atlanır."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Bu task'tan önce 'done' olması gereken task ID'leri. Batch seçimi buna bakar."
+        },
+        "agent":      { "type": ["string", "null"], "description": "Bu task'ı yapan sağlayıcı (son deneme)." },
+        "commit_sha": { "type": ["string", "null"], "description": "Task'ı done yapan commit. Kanıt budur, agent'ın anlatısı değil." },
+        "last_gate_output": {
+          "type": ["string", "null"],
+          "description": "Blocked ise: hangi tier'da, hangi ham hata. Teşhis için."
+        },
+        "updated_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

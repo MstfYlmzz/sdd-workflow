@@ -1,0 +1,53 @@
+# =============================================================================
+# .sdd/config.yaml  —  PROJEYE ÖZEL TEK DOSYA
+# =============================================================================
+# Bu dosya `sdd init` ile yeni projeye kopyalanır. Workflow reposundaki hiçbir
+# kod projeyi bilmez; projeye dair her şey SADECE bu dosyadadır. Deneme
+# sırasında çıkan sorunların çoğu workflow reposunda düzeltilir, bu dosyada
+# değil. Buraya yalnızca "bu proje için cevap" niteliğindeki şeyler yazılır.
+# -----------------------------------------------------------------------------
+
+# --- Stage başına agent / model / effort -------------------------------------
+# `sdd` her çalıştığında bu seçimleri gösterir; Enter ile devam eder ya da
+# interaktif menüden değiştirirsin. Değiştirdiğinde buraya geri yazılır
+# (hafıza budur — her seferinde yeniden seçmezsin).
+#
+# effort her sağlayıcıda farklı şey demektir; adapter kendi karşılığına çevirir:
+#   claude -> thinking bütçesi
+#   codex  -> reasoning effort (low|medium|high)
+#   cursor -> kendi karşılığı
+agents:
+  spec:      { agent: claude, model: opus,   effort: high }
+  plan:      { agent: claude, model: opus,   effort: high }
+  tasks:     { agent: codex,  model: gpt-5,  effort: medium }
+  analyze:   { agent: claude, model: sonnet, effort: medium }
+  implement: { agent: codex,  model: gpt-5,  effort: medium }
+
+# --- Tier 1 kapıları ---------------------------------------------------------
+# "Proje hâlâ ayakta mı?" kontrolü bu komutları çalıştırıp exit code'a bakar.
+# Bir komut projede TANIMLI DEĞİLSE sessizce atlanır, hata sayılmaz. Sıfır
+# projede hepsi atlanır; script'ler oluştukça kendiliğinden devreye girer.
+# Sıra ucuzdan pahalıya; ilk hatada durulur.
+gates:
+  - name: lint
+    cmd:  npm run lint
+  - name: types
+    cmd:  npx tsc --noEmit
+  - name: build
+    cmd:  npm run build
+  - name: test
+    cmd:  npm test
+
+# --- Implement loop davranışı ------------------------------------------------
+loop:
+  batch_size:      4    # bir batch'te kaç açık task işlenir (3-5 önerilir)
+  max_attempts:    3    # bir task kaç kez denenir; sonra "blocked"
+  escalate_at:     2    # kaçıncı denemede daha güçlü model/effort'a geçilir
+  circuit_breaker: 3    # kaç ARDIŞIK batch hatasından sonra insana dönülür
+  observe_every:   0    # 0 = durmadan ak; N = her N batch'te dur ve devamı bekle
+
+# --- Analyze davranışı -------------------------------------------------------
+# Analyze her zaman otonom koşar ve rapor üretir. Rapordaki bulgu bu seviyede
+# ya da üstündeyse loop durur ve seni çağırır; altındaysa sessizce devam eder.
+analyze:
+  block_on: critical   # critical | warning | info | never
