@@ -2,25 +2,19 @@
 <#
 .SYNOPSIS
   SDD workflow giriş noktası. Proje klasöründe `sdd <komut>` olarak çalışır.
-
 .DESCRIPTION
   Bu dosya sadece dağıtıcıdır: argümanı okur, ilgili lib fonksiyonunu çağırır.
   Hiçbir iş mantığı burada YAŞAMAZ. Projeye özel hiçbir varsayım burada YOK.
 
-  Komutlar (nihai hedef — bu turda hepsi taslak):
+  Komutlar:
     sdd init                 Projeye .sdd/ iskeletini ve config'i kurar
-    sdd spec      [-Prompt]  spec stage'ini çalıştırır
-    sdd plan      [-Prompt]  plan stage'ini çalıştırır
-    sdd tasks     [-Prompt]  tasks stage'ini çalıştırır
-    sdd analyze              analyze stage'ini çalıştırır (otonom, rapor üretir)
-    sdd implement            implement loop'unu başlatır (Tier 0 + Tier 1)
+    sdd spec      [-Prompt]  spec stage'ini çalıştırır          (henüz taslak)
+    sdd plan      [-Prompt]  plan stage'ini çalıştırır          (henüz taslak)
+    sdd tasks     [-Prompt]  tasks stage'ini çalıştırır         (henüz taslak)
+    sdd analyze              analyze stage'ini çalıştırır        (henüz taslak)
+    sdd implement            implement loop'unu başlatır         (henüz taslak)
     sdd status               ledger özetini gösterir
-    sdd config               stage seçim arayüzünü açar (agent/model/effort)
-
-  Ortak bayraklar:
-    -Prompt "<metin>"   Aynı stage'i düzeltme talimatıyla yeniden çalıştırır
-    -Resume             Yarıda kalmış stage'i kaldığı yerden sürdürür
-    -ObserveEvery N     implement: her N batch'te dur ve devamı bekle
+    sdd config               stage seçim arayüzünü açar          (henüz taslak)
 #>
 
 [CmdletBinding()]
@@ -37,7 +31,6 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $PSCommandPath
 $lib  = Join-Path (Split-Path -Parent $here) 'lib'
 
-# lib modüllerini yükle
 . (Join-Path $lib 'common.ps1')
 . (Join-Path $lib 'ledger.ps1')
 . (Join-Path $lib 'stages.ps1')
@@ -45,15 +38,75 @@ $lib  = Join-Path (Split-Path -Parent $here) 'lib'
 . (Join-Path $lib 'tier1.ps1')
 . (Join-Path $lib 'loop.ps1')
 
+# adapter'ları yükle
+Get-ChildItem -Path (Join-Path $lib 'adapters') -Filter '*.ps1' | ForEach-Object { . $_.FullName }
+
+function Show-Help {
+    Write-Host ""
+    Write-Host "sdd — spec-driven development orkestratörü" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  sdd init        projeye .sdd/ kurar"
+    Write-Host "  sdd status      ledger özeti"
+    Write-Host "  sdd spec|plan|tasks|analyze|implement|config   (yapım aşamasında)"
+    Write-Host ""
+}
+
 function Invoke-Sdd {
-    # TODO: $Command'a göre ilgili Invoke-* fonksiyonuna yönlendir.
-    #   init      -> Initialize-SddProject
-    #   spec/plan/tasks/analyze -> Invoke-Stage -Name <command> -Rest $Rest
-    #   implement -> Invoke-ImplementLoop -Rest $Rest
-    #   status    -> Show-LedgerStatus
-    #   config    -> Show-AgentSelection (kaydet)
-    # Komut yoksa kısa yardım bas.
-    throw [System.NotImplementedException]::new('Invoke-Sdd henüz uygulanmadı.')
+    if (-not $Command) { Show-Help; return }
+
+    switch ($Command) {
+        'init' {
+            $res = Initialize-SddProject -ProjectRoot (Get-Location).Path
+            Write-Host ""
+            Write-Host "SDD kuruldu." -ForegroundColor Green
+            foreach ($c in $res.Created) { Write-Host "  + $c" -ForegroundColor Green }
+            foreach ($s in $res.Skipped) { Write-Host "  = $s (zaten var, dokunulmadı)" -ForegroundColor DarkGray }
+            Write-Host ""
+            Write-Host "Sonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'." -ForegroundColor Gray
+            Write-Host ""
+        }
+        'status' {
+            $root  = Find-ProjectRoot
+            $paths = Get-SddPaths -ProjectRoot $root
+            Show-LedgerStatus -StatePath $paths.State
+        }
+        { $_ -in 'spec','plan','tasks' } {
+            $root  = Find-ProjectRoot
+            $paths = Get-SddPaths -ProjectRoot $root
+            $cfg   = Read-SddConfig -ConfigPath $paths.Config
+            $L     = Read-Ledger -StatePath $paths.State
+
+            # -Prompt "<metin>" ve serbest argüman ayrıştırması
+            $userArgs = ''
+            $fixPrompt = ''
+            $doResume = $false
+            for ($i = 0; $i -lt $Rest.Count; $i++) {
+                switch -Regex ($Rest[$i]) {
+                    '^-Prompt$'  { $fixPrompt = $Rest[++$i]; continue }
+                    '^-Resume$'  { $doResume = $true; continue }
+                    default      { $userArgs = if ($userArgs) { "$userArgs $($Rest[$i])" } else { $Rest[$i] } }
+                }
+            }
+
+            $res = Invoke-Stage -Name $Command -ProjectRoot $root -Config $cfg -Ledger $L `
+                                -Arguments $userArgs -Prompt $fixPrompt -Resume:$doResume
+            Write-Ledger -Ledger $L -StatePath $paths.State
+
+            if ($res.ok) {
+                Write-Host ""
+                Write-Host "[$Command] tamamlandı." -ForegroundColor Green
+                if ($res.feature_dir) { Write-Host "  feature: $($res.feature_dir)" -ForegroundColor Gray }
+            } else {
+                Write-Host ""
+                Write-Host "[$Command] başarısız — .sdd/logs/$Command.log'a bak." -ForegroundColor Red
+            }
+        }
+        default {
+            Write-Host ""
+            Write-Host "'$Command' henüz uygulanmadı (bu turda init + status çalışıyor)." -ForegroundColor Yellow
+            Write-Host ""
+        }
+    }
 }
 
 Invoke-Sdd

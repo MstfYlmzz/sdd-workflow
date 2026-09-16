@@ -1,34 +1,171 @@
 <#
-  adapters/codex.ps1 — Codex CLI adapteri.
-  Aynı ortak sözleşmeyi konuşur (bkz. adapters/claude.ps1 başlığı).
+  adapters/codex.ps1 — Codex CLI adapteri (codex-cli 0.153.x).
+  Aynı ortak sözleşmeyi konuşur:
+    girdi:  @{ prompt; model; effort; resume_session; cwd; log_path; output_schema }
+    çıktı:  @{ ok; session_id; denied; last_message; log_path }
 
-  Codex'e özgü çeviriler:
-    effort -> reasoning effort (low|medium|high) — burada birebir karşılık var
-    resume -> Codex'in kendi oturum sürdürme mekanizması (varsa); yoksa
-              çıktıda ok=true ama session_id=null döner -> loop baştan çalıştırır
-    izin   -> --sandbox <mod> (otonom loop için tam erişim gereken mod)
-    çıktı  -> --json (satır satır olay akışı) -> canlı akış + logla
+  Codex'e özgü gerçek bayraklar (0.153.4 `codex exec --help` çıktısından):
+    -m <model>                          model seçimi
+    -c model_reasoning_effort="<e>"     effort (ayrı bayrak yok, config override)
+    -s danger-full-access               sandbox: tam erişim (otonom loop için)
+    -C <dir>                            çalışma kökü
+    --json                              stdout'a JSONL olay akışı
+    -o <file>                           agent'ın son mesajını dosyaya yaz
+    --output-schema <file>              (opsiyonel) yapılandırılmış çıktı şeması
+    codex exec resume <thread_id> ...   önceki oturumu sürdür
+
+  JSONL olay tipleri (gözlemlenen):
+    {"type":"thread.started","thread_id":"..."}          -> session_id
+    {"type":"turn.started"}
+    {"type":"item.completed","item":{"type":"agent_message","text":"..."}}
+    {"type":"turn.completed","usage":{...}}
+    (hata/red durumları da event olarak gelir -> denied'a toplanır)
 #>
 
+Set-StrictMode -Version Latest
+
 function Invoke-CodexAgent {
-    param([hashtable] $Request)
-    # TODO:
-    #   codex exec "<prompt>" `
-    #     --model <model> `
-    #     --reasoning-effort <effort> `
-    #     --sandbox <mod> `
-    #     --json
-    #   json olay akışını oku -> canlı akıt + logla,
-    #   varsa oturum kimliğini çıkar (yoksa null).
-    throw [System.NotImplementedException]::new('Invoke-CodexAgent')
+    param([Parameter(Mandatory)] [hashtable] $Request)
+
+    $codexArgs = [System.Collections.Generic.List[string]]::new()
+    $codexArgs.Add('exec')
+
+    # Resume: prompt yerine "resume <id>" gelir, prompt yine de eklenebilir
+    if ($Request.ContainsKey('resume_session') -and $Request.resume_session) {
+        $codexArgs.Add('resume')
+        $codexArgs.Add([string]$Request.resume_session)
+    }
+
+    if ($Request.ContainsKey('model') -and $Request.model) {
+        $codexArgs.Add('-m'); $codexArgs.Add([string]$Request.model)
+    }
+    if ($Request.ContainsKey('effort') -and $Request.effort) {
+        $codexArgs.Add('-c'); $codexArgs.Add("model_reasoning_effort=`"$($Request.effort)`"")
+    }
+
+    # Otonom loop: tam erişim, onay yok
+    $codexArgs.Add('-s'); $codexArgs.Add('danger-full-access')
+
+    if ($Request.ContainsKey('cwd') -and $Request.cwd) {
+        $codexArgs.Add('-C'); $codexArgs.Add([string]$Request.cwd)
+    }
+    if ($Request.ContainsKey('output_schema') -and $Request.output_schema) {
+        $codexArgs.Add('--output-schema'); $codexArgs.Add([string]$Request.output_schema)
+    }
+
+    # Son mesajı ayrı dosyaya da yazdır (ayrıştırmaya güvenmeden)
+    $lastMsgFile = [System.IO.Path]::GetTempFileName()
+    $codexArgs.Add('-o'); $codexArgs.Add($lastMsgFile)
+
+    $codexArgs.Add('--json')
+
+    # Prompt en sona (resume'da bile ek talimat olarak geçerli)
+    if ($Request.ContainsKey('prompt') -and $Request.prompt) {
+        $codexArgs.Add([string]$Request.prompt)
+    }
+
+    $result = [ordered]@{
+        ok           = $false
+        session_id   = $null
+        denied       = [System.Collections.Generic.List[string]]::new()
+        last_message = $null
+        log_path     = $Request.log_path
+    }
+    $sawTurnCompleted = $false
+    $messageParts = [System.Collections.Generic.List[string]]::new()
+
+    # codex'i çalıştır, JSONL'i satır satır CANLI işle (pipeline streaming)
+    & codex @codexArgs 2>&1 | ForEach-Object {
+        $line = [string]$_
+        Read-CodexEvent -Line $line -Result $result -MessageParts $messageParts `
+                        -OnTurnCompleted { $script:__sawTurn = $true } -LogPath $Request.log_path
+    }
+
+    # son mesajı dosyadan al (varsa), yoksa toplanan parçalardan
+    if (Test-Path -LiteralPath $lastMsgFile) {
+        $fileMsg = (Get-Content -LiteralPath $lastMsgFile -Raw -ErrorAction SilentlyContinue)
+        if ($fileMsg) { $result.last_message = $fileMsg.TrimEnd() }
+        Remove-Item -LiteralPath $lastMsgFile -ErrorAction SilentlyContinue
+    }
+    if (-not $result.last_message -and $messageParts.Count -gt 0) {
+        $result.last_message = ($messageParts -join "`n")
+    }
+
+    $result.ok = $script:__sawTurn -and ($result.denied.Count -eq 0)
+    $result.denied = @($result.denied)
+    Remove-Variable -Scope script -Name __sawTurn -ErrorAction SilentlyContinue
+    return [pscustomobject]$result
+}
+
+function Read-CodexEvent {
+    <#
+      Tek bir JSONL satırını ayrıştırır: session_id yakalar, agent_message
+      metnini toplar + canlı akıtır, turn.completed işaretler, hata/red
+      olaylarını denied'a ekler. JSON olmayan satırlar ham akıtılır.
+    #>
+    param(
+        [string] $Line,
+        [System.Collections.IDictionary] $Result,
+        [System.Collections.Generic.List[string]] $MessageParts,
+        [scriptblock] $OnTurnCompleted,
+        [string] $LogPath
+    )
+    if ([string]::IsNullOrWhiteSpace($Line)) { return }
+
+    $evt = $null
+    try { $evt = $Line | ConvertFrom-Json -ErrorAction Stop } catch { }
+
+    if ($null -eq $evt) {
+        # JSON değil (ör. stderr uyarısı) — ham akıt + logla
+        Write-SddLog -Message $Line -LogPath $LogPath -Level 'stream'
+        return
+    }
+
+    switch ($evt.type) {
+        'thread.started' {
+            if ($evt.PSObject.Properties.Name -contains 'thread_id') {
+                $Result.session_id = $evt.thread_id
+                Write-SddLog -Message "session: $($evt.thread_id)" -LogPath $LogPath -Level 'info'
+            }
+        }
+        'turn.started' { }
+        'item.completed' {
+            if ($evt.item -and $evt.item.type -eq 'agent_message' -and $evt.item.PSObject.Properties.Name -contains 'text') {
+                $MessageParts.Add([string]$evt.item.text)
+                Write-SddLog -Message $evt.item.text -LogPath $LogPath -Level 'stream'
+            }
+            elseif ($evt.item -and $evt.item.type -eq 'command_execution') {
+                # çalıştırılan komutları da akıt (görünürlük için)
+                $cmd = if ($evt.item.PSObject.Properties.Name -contains 'command') { $evt.item.command } else { '' }
+                if ($cmd) { Write-SddLog -Message "$ $cmd" -LogPath $LogPath -Level 'stream' }
+            }
+        }
+        'turn.completed' {
+            if ($OnTurnCompleted) { & $OnTurnCompleted }
+        }
+        'error' {
+            $msg = if ($evt.PSObject.Properties.Name -contains 'message') { $evt.message } else { 'bilinmeyen hata' }
+            $Result.denied.Add([string]$msg)
+            Write-SddLog -Message "HATA: $msg" -LogPath $LogPath -Level 'error'
+        }
+        default {
+            # tanınmayan olay tipleri: sessizce logla (akıtma)
+            if ($LogPath) { Write-SddLog -Message $Line -LogPath $LogPath -Level 'stream' }
+        }
+    }
 }
 
 function Convert-EffortToCodex {
     <#
-      Soyut effort'u Codex reasoning effort'una çevirir. Genelde birebir
-      (low/medium/high) ama tek yerde tutulur ki değişirse burada değişsin.
+      Soyut effort'u Codex model_reasoning_effort'una çevirir.
+      Codex low|medium|high bekliyor; birebir geçiyoruz ama geçersiz değeri
+      medium'a sabitliyoruz.
     #>
     param([string] $Effort)
-    # TODO: eşleme.
-    throw [System.NotImplementedException]::new('Convert-EffortToCodex')
+    switch ($Effort) {
+        'low'    { 'low' }
+        'medium' { 'medium' }
+        'high'   { 'high' }
+        default  { 'medium' }
+    }
 }

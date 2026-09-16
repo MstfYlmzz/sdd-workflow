@@ -17,11 +17,13 @@
 #   codex  -> reasoning effort (low|medium|high)
 #   cursor -> kendi karşılığı
 agents:
-  spec:      { agent: claude, model: opus,   effort: high }
-  plan:      { agent: claude, model: opus,   effort: high }
-  tasks:     { agent: codex,  model: gpt-5,  effort: medium }
-  analyze:   { agent: claude, model: sonnet, effort: medium }
-  implement: { agent: codex,  model: gpt-5,  effort: medium }
+  # NOT: model isimleri Codex kurulumuna göre değişebilir. Gerçek isimleri
+  # görmek için `codex --help` / hesabındaki modellere bak, buradan düzelt.
+  spec:      { agent: codex, model: gpt-5-codex, effort: high }
+  plan:      { agent: codex, model: gpt-5-codex, effort: high }
+  tasks:     { agent: codex, model: gpt-5-codex, effort: medium }
+  analyze:   { agent: codex, model: gpt-5-codex, effort: medium }
+  implement: { agent: codex, model: gpt-5-codex, effort: medium }
 
 # --- Tier 1 kapıları ---------------------------------------------------------
 # "Proje hâlâ ayakta mı?" kontrolü bu komutları çalıştırıp exit code'a bakar.
