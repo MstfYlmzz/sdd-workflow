@@ -17,13 +17,14 @@
 #   codex  -> reasoning effort (low|medium|high)
 #   cursor -> kendi karşılığı
 agents:
-  # NOT: model isimleri Codex kurulumuna göre değişebilir. Gerçek isimleri
-  # görmek için `codex --help` / hesabındaki modellere bak, buradan düzelt.
-  spec:      { agent: codex, model: gpt-5-codex, effort: high }
-  plan:      { agent: codex, model: gpt-5-codex, effort: high }
-  tasks:     { agent: codex, model: gpt-5-codex, effort: medium }
-  analyze:   { agent: codex, model: gpt-5-codex, effort: medium }
-  implement: { agent: codex, model: gpt-5-codex, effort: medium }
+  # NOT: model ismi Codex kurulumuna göre değişir. Kendi varsayılanını görmek
+  # için: Get-Content $HOME/.codex/config.toml | Select-String model
+  # Buradaki gpt-5.6-sol bir varsayılan; kendi modelinle değiştir.
+  spec:      { agent: codex, model: gpt-5.6-sol, effort: high }
+  plan:      { agent: codex, model: gpt-5.6-sol, effort: high }
+  tasks:     { agent: codex, model: gpt-5.6-sol, effort: medium }
+  analyze:   { agent: codex, model: gpt-5.6-sol, effort: medium }
+  implement: { agent: codex, model: gpt-5.6-sol, effort: medium }
 
 # --- Tier 1 kapıları ---------------------------------------------------------
 # "Proje hâlâ ayakta mı?" kontrolü bu komutları çalıştırıp exit code'a bakar.

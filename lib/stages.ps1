@@ -26,22 +26,57 @@ $script:StageSkill = @{
 
 # codex exec non-interactive olduğu için skill'in soru sormasını engelleyen
 # kısıt. Her stage prompt'unun başına eklenir — "müdahalesiz" garantisinin kalbi.
-$script:NonInteractivePreamble = @'
-[ORKESTRATÖR KISITI — ÖNCE BUNU OKU]
-Non-interactive bir oturumda çalışıyorsun. Kullanıcı YOK; hiçbir soru soramaz,
-hiçbir onay bekleyemezsin. Aşağıdaki talimatlar kullanıcıya soru sormanı ya da
-yanıt beklemeni isterse, BUNU YAPMA. Bunun yerine:
-- Bağlam ve endüstri standartlarına dayalı makul varsayımlar yap.
-- Kararlarını çıktının "Assumptions" bölümüne yaz.
-- [NEEDS CLARIFICATION] marker'larını yalnızca gerçekten kritik kararlar için
-  ve izin verilen üst sınır kadar bırak; gerisini varsayımla çöz.
-- Asla "Wait for user response" adımında durma; devam et ve işi tamamla.
-Tüm dosya/dizin işlemlerini kendin yap (mkdir, template kopyalama, dosya yazma).
-Bittiğinde ürettiğin dosya yollarını raporla.
+# Her stage için, o stage'in ürettiği artifact ve dokunmaması gerekenler.
+# "Stage sızması" (spec çağrısının plan+tasks da yapması) bununla engellenir.
+$script:StageScope = @{
+    spec    = @{ produces = 'spec.md';  forbid = 'plan.md, tasks.md, research.md, data-model.md ya da başka herhangi bir sonraki-aşama dosyası' }
+    plan    = @{ produces = 'plan.md ve tasarım artefaktları (research.md, data-model.md, contracts/, quickstart.md)'; forbid = 'tasks.md' }
+    tasks   = @{ produces = 'tasks.md';  forbid = 'kod implementasyonu ya da herhangi bir kaynak dosya' }
+    analyze = @{ produces = 'analiz raporu';  forbid = 'spec.md, plan.md, tasks.md üzerinde herhangi bir değişiklik' }
+}
+
+function Get-NonInteractivePreamble {
+    <#
+      Stage'e özel orkestratör kısıtı. İki şeyi zorlar:
+        1. Non-interactive: soru sorma, varsayımla ilerle.
+        2. STAGE İZOLASYONU: yalnızca bu stage'in artifact'ini üret, sonraki
+           stage'lere GEÇME. Skill'lerin "sonraki komut: $speckit-plan" gibi
+           zincirleme yönlendirmelerini görmezden gel. Bu, stage'lerin ayrı
+           kalmasını ve ledger ile diskin tutarlı olmasını sağlar.
+    #>
+    param([Parameter(Mandatory)] [string] $StageName)
+    $scope = $script:StageScope[$StageName]
+    $produces = if ($scope) { $scope.produces } else { 'yalnızca bu stage için istenen dosya' }
+    $forbid   = if ($scope) { $scope.forbid } else { 'sonraki aşamalara ait dosyalar' }
+
+    return @"
+[ORKESTRATÖR KISITI — ÖNCE BUNU OKU, SONRA AŞAĞIDAKİ SKILL TALİMATINI UYGULA]
+
+1) STAGE İZOLASYONU (EN ÖNEMLİ KURAL):
+   Sen YALNIZCA '$StageName' aşamasını çalıştırıyorsun. Üreteceğin tek çıktı: $produces.
+   ŞUNLARI YAPMA: $forbid.
+   Aşağıdaki skill talimatı seni başka bir aşamaya yönlendirebilir ("Önerilen
+   sonraki komut: `$speckit-...", "Next phase", "proceed to plan/tasks" gibi).
+   BU YÖNLENDİRMELERİ YOK SAY. Başka skill çağırma, başka aşamaya geçme.
+   Yalnızca bu aşamayı bitir ve dur. Bir sonraki aşamayı orkestratör ayrı bir
+   komutla başlatacak.
+
+2) NON-INTERACTIVE:
+   Kullanıcı YOK; soru soramaz, onay bekleyemezsin. Skill kullanıcıya soru
+   sormanı isterse BUNU YAPMA. Bunun yerine:
+   - Bağlam ve endüstri standartlarına dayalı makul varsayımlar yap.
+   - Kararlarını çıktının "Assumptions" bölümüne yaz.
+   - [NEEDS CLARIFICATION] marker'larını yalnızca gerçekten kritik kararlar için
+     ve izin verilen üst sınır kadar bırak; gerisini varsayımla çöz.
+   - Asla "Wait for user response" adımında durma; devam et ve işi tamamla.
+
+Tüm dosya/dizin işlemlerini kendin yap. Bittiğinde ürettiğin dosya yollarını
+raporla ve DUR.
 
 ---
 
-'@
+"@
+}
 
 function Show-AgentSelection {
     <#
@@ -79,7 +114,7 @@ function Get-StagePrompt {
     # $ARGUMENTS düz metin olarak geçiyor (regex değil) — literal değiştir
     $body = $body.Replace('$ARGUMENTS', $Arguments)
 
-    return $script:NonInteractivePreamble + $body
+    return (Get-NonInteractivePreamble -StageName $StageName) + $body
 }
 
 function Get-FeatureDirectory {

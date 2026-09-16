@@ -28,6 +28,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Türkçe karakterlerin konsolda ve dosya okumada bozulmaması için UTF-8'e sabitle
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+    $PSDefaultParameterValues['*:Encoding'] = 'utf8'
+} catch { }
+
 $here = Split-Path -Parent $PSCommandPath
 $lib  = Join-Path (Split-Path -Parent $here) 'lib'
 
@@ -77,14 +85,16 @@ function Invoke-Sdd {
             $L     = Read-Ledger -StatePath $paths.State
 
             # -Prompt "<metin>" ve serbest argüman ayrıştırması
+            # ($Rest argümansız çağrıda null olabilir; @() ile güvene al)
+            $restArr = @($Rest)
             $userArgs = ''
             $fixPrompt = ''
             $doResume = $false
-            for ($i = 0; $i -lt $Rest.Count; $i++) {
-                switch -Regex ($Rest[$i]) {
-                    '^-Prompt$'  { $fixPrompt = $Rest[++$i]; continue }
+            for ($i = 0; $i -lt $restArr.Count; $i++) {
+                switch -Regex ($restArr[$i]) {
+                    '^-Prompt$'  { $fixPrompt = $restArr[++$i]; continue }
                     '^-Resume$'  { $doResume = $true; continue }
-                    default      { $userArgs = if ($userArgs) { "$userArgs $($Rest[$i])" } else { $Rest[$i] } }
+                    default      { $userArgs = if ($userArgs) { "$userArgs $($restArr[$i])" } else { $restArr[$i] } }
                 }
             }
 

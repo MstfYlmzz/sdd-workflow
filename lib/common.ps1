@@ -227,6 +227,18 @@ function Initialize-SddProject {
     $created = [System.Collections.Generic.List[string]]::new()
     $skipped = [System.Collections.Generic.List[string]]::new()
 
+    # Git repo şart: Tier 0 baseline'a, Codex de "trusted directory" için git'e
+    # muhtaç. Repo yoksa başlat.
+    if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot '.git'))) {
+        Push-Location $ProjectRoot
+        try {
+            git init 2>&1 | Out-Null
+            $created.Add((Join-Path $ProjectRoot '.git') + '  (git init)')
+        } catch {
+            Write-Warning "git init başarısız — git kurulu mu? Tier 0 ve Codex git repo gerektirir."
+        } finally { Pop-Location }
+    }
+
     foreach ($d in @($paths.SddDir, $paths.SpecsDir, $paths.LogsDir)) {
         if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null; $created.Add($d) }
     }
