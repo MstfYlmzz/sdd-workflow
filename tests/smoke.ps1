@@ -87,6 +87,13 @@ try {
     $probationResult = Invoke-Tier1 -Config ([pscustomobject]@{ gates = @($probationGate) }) -ProjectRoot $fixture -Ledger $probationLedger
     Assert-True $probationResult.ok 'Başlangıçta unavailable gate ilk yeşil geçişine kadar ertelenmeli.'
 
+    $blankLog = Join-Path $fixture '.sdd/logs/blank-output.log'
+    Write-SddLog -Message '' -LogPath $blankLog -Level 'stream'
+    $blankCommand = if ($IsWindows) { 'echo.' } else { "printf '\n'" }
+    $blankGate = Invoke-GateCommand -Gate ([pscustomobject]@{ name='blank-output'; cmd=$blankCommand }) `
+                                    -ProjectRoot $fixture -LogPath $blankLog
+    Assert-True $blankGate.ok 'Boş çıktı satırı logger exception üretip geçen gate''i düşürmemeli.'
+
     $profile = Get-EscalatedProfile -BaseProfile ([pscustomobject]@{ agent='codex'; model='gpt-5.6-sol'; effort='medium' }) -Attempt 2
     Assert-True ($profile.model -eq 'gpt-5.6-sol' -and $profile.effort -eq 'high') 'Escalation modeli sabit tutup effort yükseltmeli.'
 
