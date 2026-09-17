@@ -65,7 +65,13 @@
         "session_id":  { "type": ["string", "null"], "description": "Sağlayıcı resume kimliği (varsa). Yoksa resume = stage'i baştan çalıştır." },
         "started_at":  { "type": ["string", "null"], "format": "date-time" },
         "finished_at": { "type": ["string", "null"], "format": "date-time" },
-        "log_path":    { "type": ["string", "null"], "description": ".sdd/logs/ altındaki çalışma kaydı." }
+        "log_path":    { "type": ["string", "null"], "description": ".sdd/logs/ altındaki çalışma kaydı." },
+        "stop_reason": { "type": ["string", "null"], "description": "Implement loop'un son durma/devam nedeni." },
+        "last_error":  { "type": ["string", "null"], "description": "Son Tier 0/Tier 1 ya da adapter hatasının ham metni." },
+        "consecutive_failures": { "type": "integer", "minimum": 0, "description": "Circuit breaker için ardışık başarısız batch sayısı." },
+        "highest_severity": { "type": "string", "enum": ["none", "info", "warning", "critical"], "description": "Analyze aşamasındaki en ağır bulgu." },
+        "finding_count": { "type": "integer", "minimum": 0 },
+        "summary": { "type": ["string", "null"] }
       }
     },
     "task": {
@@ -106,6 +112,10 @@
         "last_gate_output": {
           "type": ["string", "null"],
           "description": "Blocked ise: hangi tier'da, hangi ham hata. Teşhis için."
+        },
+        "strict_gates": {
+          "type": "boolean",
+          "description": "True ise bu task normal probation istisnalarını kullanmadan bütün Tier 1 gate'lerini geçmelidir. Final gate repair tasklarında kullanılır."
         },
         "updated_at": { "type": ["string", "null"], "format": "date-time" }
       }

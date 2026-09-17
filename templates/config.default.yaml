@@ -22,20 +22,21 @@ agents:
   # Buradaki gpt-5.6-sol bir varsayılan; kendi modelinle değiştir.
   spec:      { agent: codex, model: gpt-5.6-sol, effort: high }
   plan:      { agent: codex, model: gpt-5.6-sol, effort: high }
-  tasks:     { agent: codex, model: gpt-5.6-sol, effort: medium }
-  analyze:   { agent: codex, model: gpt-5.6-sol, effort: medium }
+  tasks:     { agent: cursor, model: auto, effort: medium }
+  analyze:   { agent: claude, model: sonnet, effort: medium }
   implement: { agent: codex, model: gpt-5.6-sol, effort: medium }
 
 # --- Tier 1 kapıları ---------------------------------------------------------
 # "Proje hâlâ ayakta mı?" kontrolü bu komutları çalıştırıp exit code'a bakar.
-# Bir komut projede TANIMLI DEĞİLSE sessizce atlanır, hata sayılmaz. Sıfır
-# projede hepsi atlanır; script'ler oluştukça kendiliğinden devreye girer.
-# Sıra ucuzdan pahalıya; ilk hatada durulur.
+# Batch sırasında henüz tanımlı olmayan gate ertelenir. Bütün task'lar bitince
+# FINAL STRICT kontrolde required gate'lerin tamamı mevcut ve yeşil olmalıdır.
+# Gerçekten bilgilendirme amaçlı bir gate için `required: false` eklenebilir.
+# Sıra ucuzdan pahalıya; ilk zorunlu hatada durulur.
 gates:
   - name: lint
     cmd:  npm run lint
   - name: types
-    cmd:  npx tsc --noEmit
+    cmd:  npm run typecheck
   - name: build
     cmd:  npm run build
   - name: test
@@ -45,7 +46,7 @@ gates:
 loop:
   batch_size:      4    # bir batch'te kaç açık task işlenir (3-5 önerilir)
   max_attempts:    3    # bir task kaç kez denenir; sonra "blocked"
-  escalate_at:     2    # kaçıncı denemede daha güçlü model/effort'a geçilir
+  escalate_at:     2    # kaçıncı denemede seçili model korunup effort yükseltilir
   circuit_breaker: 3    # kaç ARDIŞIK batch hatasından sonra insana dönülür
   observe_every:   0    # 0 = durmadan ak; N = her N batch'te dur ve devamı bekle
 

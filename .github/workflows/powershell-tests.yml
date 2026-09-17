@@ -1,0 +1,27 @@
+name: PowerShell tests
+
+on:
+  push:
+    branches: [main, codex/implement-loop]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Git identity
+        shell: pwsh
+        run: |
+          git config --global user.email "sdd-ci@example.invalid"
+          git config --global user.name "SDD CI"
+      - name: Run test suite
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tests/run-all.ps1

@@ -181,7 +181,10 @@ function Write-SddLog {
       her şey foreground'da görünür, aynı anda kaydedilir.
     #>
     param(
-        [Parameter(Mandatory)] [string] $Message,
+        # Komut çıktıları doğal olarak boş satır içerebilir. Mandatory string
+        # parametre PowerShell'de "" değerini varsayılan olarak reddeder;
+        # stream logger boş satırı da güvenle kaydedebilmelidir.
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Message,
         [string] $LogPath,
         [ValidateSet('info','warn','error','stream')] [string] $Level = 'info'
     )

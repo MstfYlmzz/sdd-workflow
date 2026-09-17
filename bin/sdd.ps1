@@ -8,11 +8,11 @@
 
   Komutlar:
     sdd init                 Projeye .sdd/ iskeletini ve config'i kurar
-    sdd spec      [-Prompt]  spec stage'ini çalıştırır          (henüz taslak)
-    sdd plan      [-Prompt]  plan stage'ini çalıştırır          (henüz taslak)
-    sdd tasks     [-Prompt]  tasks stage'ini çalıştırır         (henüz taslak)
-    sdd analyze              analyze stage'ini çalıştırır        (henüz taslak)
-    sdd implement            implement loop'unu başlatır         (henüz taslak)
+    sdd spec      [-Prompt]  spec stage'ini çalıştırır
+    sdd plan      [-Prompt]  plan stage'ini çalıştırır
+    sdd tasks     [-Prompt]  tasks stage'ini çalıştırır
+    sdd analyze              read-only tutarlılık analizini çalıştırır
+    sdd implement            Tier 0 + Tier 1 implement loop'unu başlatır
     sdd status               ledger özetini gösterir
     sdd config               stage seçim arayüzünü açar          (henüz taslak)
 #>
@@ -55,7 +55,11 @@ function Show-Help {
     Write-Host ""
     Write-Host "  sdd init        projeye .sdd/ kurar"
     Write-Host "  sdd status      ledger özeti"
-    Write-Host "  sdd spec|plan|tasks|analyze|implement|config   (yapım aşamasında)"
+    Write-Host "  sdd spec|plan|tasks      Spec Kit stage'ini çalıştırır"
+    Write-Host "  sdd analyze              read-only tutarlılık analizi"
+    Write-Host "  sdd implement [-ObserveEvery N]   otonom implement loop"
+    Write-Host "  sdd implement -RevalidateFrom SHA -CandidateCommit SHA   mevcut candidate'ı agentsız doğrula"
+    Write-Host "  sdd config               (yapım aşamasında)"
     Write-Host ""
 }
 
@@ -126,6 +130,78 @@ function Invoke-Sdd {
                 Write-Host ""
                 Write-Host "[$Command] başarısız — .sdd/logs/$Command.log'a bak." -ForegroundColor Red
             }
+        }
+        'analyze' {
+            $root  = Find-ProjectRoot
+            $paths = Get-SddPaths -ProjectRoot $root
+            $cfg   = Read-SddConfig -ConfigPath $paths.Config
+            $L     = Read-Ledger -StatePath $paths.State
+            $res   = Invoke-Analyze -Config $cfg -Ledger $L -ProjectRoot $root -Force
+            Write-Ledger -Ledger $L -StatePath $paths.State
+
+            Write-Host ""
+            if (-not $res.ok) {
+                Write-Host "[analyze] başarısız: $($res.output)" -ForegroundColor Red
+            } elseif ($res.blocked) {
+                Write-Host "[analyze] implement engellendi — severity=$($res.severity), findings=$($res.finding_count)" -ForegroundColor Red
+                if ($res.summary) { Write-Host "  $($res.summary)" -ForegroundColor DarkYellow }
+            } else {
+                Write-Host "[analyze] geçti — severity=$($res.severity), findings=$($res.finding_count)" -ForegroundColor Green
+            }
+            Write-Host ""
+        }
+        'implement' {
+            $root  = Find-ProjectRoot
+            $paths = Get-SddPaths -ProjectRoot $root
+            $cfg   = Read-SddConfig -ConfigPath $paths.Config
+            $L     = Read-Ledger -StatePath $paths.State
+
+            $observeEvery = -1
+            $revalidateFrom = ''
+            $candidateCommit = ''
+            $restArr = @($Rest)
+            for ($i = 0; $i -lt $restArr.Count; $i++) {
+                switch -Regex ($restArr[$i]) {
+                    '^-ObserveEvery$' {
+                        if ($i + 1 -ge $restArr.Count -or $restArr[$i + 1] -notmatch '^\d+$') {
+                            throw '-ObserveEvery için sıfır veya pozitif bir sayı gerekli.'
+                        }
+                        $observeEvery = [int]$restArr[++$i]
+                        continue
+                    }
+                    '^-Resume$' { continue } # loop zaten idempotent resume eder
+                    '^-RevalidateFrom$' {
+                        if ($i + 1 -ge $restArr.Count -or [string]::IsNullOrWhiteSpace($restArr[$i + 1])) {
+                            throw '-RevalidateFrom için bir git commit SHA gerekli.'
+                        }
+                        $revalidateFrom = $restArr[++$i]
+                        continue
+                    }
+                    '^-CandidateCommit$' {
+                        if ($i + 1 -ge $restArr.Count -or [string]::IsNullOrWhiteSpace($restArr[$i + 1])) {
+                            throw '-CandidateCommit için bir git commit SHA gerekli.'
+                        }
+                        $candidateCommit = $restArr[++$i]
+                        continue
+                    }
+                    default { throw "Bilinmeyen implement argümanı: $($restArr[$i])" }
+                }
+            }
+
+            $res = Invoke-ImplementLoop -Config $cfg -Ledger $L -ProjectRoot $root -ObserveEvery $observeEvery `
+                                        -RevalidateFrom $revalidateFrom -CandidateCommit $candidateCommit
+            Write-Host ""
+            if ($res.ok -and $res.reason -eq 'completed') {
+                Write-Host "[implement] tamamlandı — tüm otonom tasklar geçti." -ForegroundColor Green
+            } elseif ($res.reason -eq 'observe_pause') {
+                Write-Host "[implement] gözlem molası — devam etmek için yeniden 'sdd implement'." -ForegroundColor Yellow
+            } else {
+                Write-Host "[implement] durdu: $($res.reason)" -ForegroundColor Yellow
+                if ($res.blocked) { Write-Host "  blocked: $(@($res.blocked) -join ', ')" -ForegroundColor Red }
+                if ($res.manual)  { Write-Host "  manual:  $(@($res.manual) -join ', ')" -ForegroundColor Yellow }
+                if ($res.output)  { Write-Host "  $($res.output)" -ForegroundColor DarkYellow }
+            }
+            Write-Host ""
         }
         default {
             Write-Host ""

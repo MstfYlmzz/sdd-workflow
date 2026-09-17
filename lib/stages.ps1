@@ -114,7 +114,19 @@ function Get-StagePrompt {
     # $ARGUMENTS düz metin olarak geçiyor (regex değil) — literal değiştir
     $body = $body.Replace('$ARGUMENTS', $Arguments)
 
-    return (Get-NonInteractivePreamble -StageName $StageName) + $body
+    $contract = if ($StageName -eq 'analyze') {
+@"
+
+[ZORUNLU ANALYZE ÇIKTI SÖZLEŞMESİ]
+Analiz read-only olmalıdır; hiçbir repo dosyasını değiştirme veya commit üretme.
+Normal analiz raporundan sonra EN SON SATIRDA tam olarak şu biçimde kompakt JSON yaz:
+SDD_ANALYZE_RESULT {"highest_severity":"none|info|warning|critical","finding_count":0,"summary":"kısa özet"}
+highest_severity en ağır gerçek bulguyu göstermeli; bulgu yoksa none kullan.
+Bu son satır olmadan stage başarısız sayılacaktır.
+"@
+    } else { '' }
+
+    return (Get-NonInteractivePreamble -StageName $StageName) + $body + $contract
 }
 
 function Get-FeatureDirectory {
@@ -136,13 +148,13 @@ function Get-FeatureDirectory {
 function Resolve-Adapter {
     <#
       Config'deki agent adına göre doğru adapter fonksiyonunu döndürür.
-      Şimdilik yalnızca codex bağlı.
+      Adapter dosyaları bin/sdd.ps1 tarafından önceden dot-source edilir.
     #>
     param([Parameter(Mandatory)] [string] $AgentName)
     switch ($AgentName) {
         'codex'  { return 'Invoke-CodexAgent' }
-        'claude' { throw 'claude adapteri henüz bağlı değil.' }
-        'cursor' { throw 'cursor adapteri henüz bağlı değil.' }
+        'claude' { return 'Invoke-ClaudeAgent' }
+        'cursor' { return 'Invoke-CursorAgent' }
         default  { throw "Bilinmeyen agent: $AgentName" }
     }
 }
@@ -237,8 +249,94 @@ function Invoke-Analyze {
     <#
       analyze stage'i: her zaman otonom koşar, yapılandırılmış bulgu üretir.
       config.analyze.block_on seviyesinde bulgu varsa loop'un durması için
-      sinyal döndürür. (Bu tur: iskelet — loop turunda tamamlanacak.)
+      sinyal döndürür. Agent'ın son mesajındaki zorunlu JSON sözleşmesini
+      ayrıştırır ve read-only kuralını git kanıtıyla doğrular.
     #>
-    param([object] $Config, [object] $Ledger, [string] $ProjectRoot)
-    throw [System.NotImplementedException]::new('Invoke-Analyze (loop turunda)')
+    param(
+        [Parameter(Mandatory)] [object] $Config,
+        [Parameter(Mandatory)] [object] $Ledger,
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [switch] $Force
+    )
+
+    function Get-AnalyzeValue([object] $Object, [string] $Name, $Default = $null) {
+        if ($null -eq $Object) { return $Default }
+        if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) { return $Object[$Name] }
+        if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
+        return $Default
+    }
+    function Test-AnalyzeThreshold([string] $Severity, [string] $BlockOn) {
+        if ($BlockOn -eq 'never') { return $false }
+        $rank = @{ none = 0; info = 1; warning = 2; critical = 3 }
+        if (-not $rank.ContainsKey($Severity)) { return $true }
+        if (-not $rank.ContainsKey($BlockOn)) { $BlockOn = 'critical' }
+        return $rank[$Severity] -ge $rank[$BlockOn]
+    }
+
+    $stage = $Ledger.stages.analyze
+    $blockOn = [string](Get-AnalyzeValue -Object (Get-AnalyzeValue -Object $Config -Name 'analyze') -Name 'block_on' -Default 'critical')
+    $savedSeverity = [string](Get-AnalyzeValue -Object $stage -Name 'highest_severity' -Default '')
+    if (-not $Force -and $stage.status -eq 'completed' -and $savedSeverity) {
+        return [pscustomobject]@{
+            ok = $true; blocked = (Test-AnalyzeThreshold -Severity $savedSeverity -BlockOn $blockOn)
+            severity = $savedSeverity; finding_count = [int](Get-AnalyzeValue -Object $stage -Name 'finding_count' -Default 0)
+            summary = [string](Get-AnalyzeValue -Object $stage -Name 'summary' -Default '')
+            reused = $true; output = $null
+        }
+    }
+
+    $baseline = Get-GitBaseline -ProjectRoot $ProjectRoot
+    $beforeDirty = @(Get-GitStatusForTier0 -ProjectRoot $ProjectRoot)
+    if ($beforeDirty.Count -gt 0) {
+        return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = "Analyze temiz çalışma ağacı gerektirir: $($beforeDirty -join ' | ')" }
+    }
+
+    $run = Invoke-Stage -Name 'analyze' -ProjectRoot $ProjectRoot -Config $Config -Ledger $Ledger
+    if (-not $run.ok) {
+        return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = 'Analyze agent çalışması tamamlanmadı.' }
+    }
+
+    $afterHead = Get-GitBaseline -ProjectRoot $ProjectRoot
+    $afterDirty = @(Get-GitStatusForTier0 -ProjectRoot $ProjectRoot)
+    if ($afterHead -ne $baseline -or $afterDirty.Count -gt 0) {
+        $stage.status = 'interrupted'
+        $detail = if ($afterHead -ne $baseline) { 'Analyze commit üretti.' } else { "Analyze dosya değiştirdi: $($afterDirty -join ' | ')" }
+        $stage | Add-Member -NotePropertyName stop_reason -NotePropertyValue 'analyze_not_read_only' -Force
+        $stage | Add-Member -NotePropertyName last_error -NotePropertyValue $detail -Force
+        return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = $detail }
+    }
+
+    $message = [string](Get-AnalyzeValue -Object $run.result -Name 'last_message' -Default '')
+    $match = [regex]::Match($message, '(?m)^SDD_ANALYZE_RESULT\s+(\{[^\r\n]+\})\s*$')
+    if (-not $match.Success) {
+        $stage.status = 'interrupted'
+        $stage | Add-Member -NotePropertyName stop_reason -NotePropertyValue 'analyze_contract_missing' -Force
+        $stage | Add-Member -NotePropertyName last_error -NotePropertyValue 'SDD_ANALYZE_RESULT satırı bulunamadı.' -Force
+        return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = 'Analyze çıktısında zorunlu SDD_ANALYZE_RESULT satırı yok.' }
+    }
+    try { $report = $match.Groups[1].Value | ConvertFrom-Json -ErrorAction Stop }
+    catch {
+        $stage.status = 'interrupted'
+        $stage | Add-Member -NotePropertyName stop_reason -NotePropertyValue 'analyze_contract_invalid' -Force
+        $stage | Add-Member -NotePropertyName last_error -NotePropertyValue $_.Exception.Message -Force
+        return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = "Analyze JSON geçersiz: $($_.Exception.Message)" }
+    }
+
+    $severity = ([string]$report.highest_severity).ToLowerInvariant()
+    if ($severity -notin @('none','info','warning','critical')) {
+        $stage.status = 'interrupted'
+        return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = "Geçersiz analyze severity: $severity" }
+    }
+    $count = [Math]::Max(0, [int]$report.finding_count)
+    $summary = [string]$report.summary
+    $stage | Add-Member -NotePropertyName highest_severity -NotePropertyValue $severity -Force
+    $stage | Add-Member -NotePropertyName finding_count -NotePropertyValue $count -Force
+    $stage | Add-Member -NotePropertyName summary -NotePropertyValue $summary -Force
+    $stage | Add-Member -NotePropertyName stop_reason -NotePropertyValue 'completed' -Force
+    $stage | Add-Member -NotePropertyName last_error -NotePropertyValue $null -Force
+
+    return [pscustomobject]@{
+        ok = $true; blocked = (Test-AnalyzeThreshold -Severity $severity -BlockOn $blockOn)
+        severity = $severity; finding_count = $count; summary = $summary; reused = $false; output = $null
+    }
 }
