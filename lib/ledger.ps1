@@ -134,6 +134,136 @@ function Render-TasksMd {
     Set-Content -LiteralPath $OutPath -Value $sb.ToString() -Encoding utf8
 }
 
+function Import-TasksToLedger {
+    <#
+      tasks.md'yi parse edip ledger'a task kayıtları olarak yükler.
+      spec-kit satır formatı: tire, boş kutu, T-numarası, opsiyonel P ve US
+      etiketleri, açıklama; dosya yolları açıklamada backtick içinde.
+
+      Çıkarılanlar:
+        id          T### (zorunlu)
+        title       [P]/[US#] etiketleri çıkarılmış açıklama
+        files       açıklamadaki backtick içindeki dosya.yolu parçaları
+        parallel    [P] var mı
+        story       [US#] etiketi (varsa)
+        phase       task'ın altında bulunduğu "## Phase N" numarası
+        depends_on  PHASE SIRASI ile: bu task, kendinden önceki bloklayıcı
+                    phase'lerdeki task'lara bağlı (task-seviyesi prose parse
+                    edilmez; yanlış sıra Tier 1 tarafından yakalanır).
+
+      Idempotent: zaten ledger'da olan (aynı id) task'ın status/attempts'ine
+      DOKUNMAZ; yalnızca title/files/story/phase'i günceller. Böylece tasks'ı
+      yeniden import etmek biten işi sıfırlamaz. Ledger'da olup tasks.md'de
+      olmayan task'lar korunur (superseded'ları kaybetme).
+    #>
+    param(
+        [Parameter(Mandatory)] [object] $Ledger,
+        [Parameter(Mandatory)] [string] $TasksMdPath
+    )
+    if (-not (Test-Path -LiteralPath $TasksMdPath)) {
+        throw "tasks.md bulunamadı: $TasksMdPath"
+    }
+
+    $lines = Get-Content -LiteralPath $TasksMdPath
+    $currentPhase = 0
+    $parsed = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($line in $lines) {
+        # phase başlığı: "## Phase 3: ..."
+        if ($line -match '^##\s+Phase\s+(\d+)') {
+            $currentPhase = [int]$Matches[1]
+            continue
+        }
+        # task satırı: "- [ ] T### ..." (yalnızca açık kutu; [x] zaten yapılmış
+        # ama biz status'ü ledger'dan yönetiyoruz, yine de id'yi alırız)
+        if ($line -match '^\s*-\s*\[[ xX]\]\s*(T\d{3,})\s+(.*)$') {
+            $id = $Matches[1]
+            $rest = $Matches[2]
+
+            # [P] işareti
+            $parallel = $false
+            if ($rest -match '^\[P\]\s*') { $parallel = $true; $rest = $rest -replace '^\[P\]\s*', '' }
+
+            # [US#] etiketi
+            $story = $null
+            if ($rest -match '^\[US(\d+)\]\s*') { $story = "US$($Matches[1])"; $rest = $rest -replace '^\[US\d+\]\s*', '' }
+            # [P] etiketi US'ten sonra da gelebilir (bazı satırlarda sıra karışık)
+            if ($rest -match '^\[P\]\s*') { $parallel = $true; $rest = $rest -replace '^\[P\]\s*', '' }
+
+            $title = $rest.Trim()
+
+            # backtick'li dosya yolları: `path/to/file.ext`
+            $files = @()
+            foreach ($m in [regex]::Matches($title, '`([^`]+)`')) {
+                $cand = $m.Groups[1].Value.Trim()
+                # dosya gibi görünenler (uzantısı olan ya da / içeren); komut/script değil
+                if ($cand -match '[\\/]' -or $cand -match '\.\w+$') {
+                    # virgülle ayrılmış çoklu yol olabilir
+                    foreach ($part in ($cand -split ',\s*')) {
+                        $p = $part.Trim()
+                        if ($p -and ($p -match '[\\/]' -or $p -match '\.\w+$')) { $files += $p }
+                    }
+                }
+            }
+            $files = @($files | Select-Object -Unique)
+
+            $parsed.Add([pscustomobject]@{
+                id = $id; title = $title; files = $files
+                parallel = $parallel; story = $story; phase = $currentPhase
+            })
+        }
+    }
+
+    # Phase sırası bağımlılığı: her task, kendinden DÜŞÜK phase'lerdeki tüm
+    # task'lara bağlı (kaba ama sağlam). Aynı phase içinde bağımlılık yok.
+    $byPhase = $parsed | Group-Object phase
+    $phaseTaskIds = @{}
+    foreach ($g in $byPhase) { $phaseTaskIds[[int]$g.Name] = @($g.Group | ForEach-Object { $_.id }) }
+    $phases = @($phaseTaskIds.Keys | Sort-Object)
+
+    foreach ($t in $parsed) {
+        $deps = @()
+        foreach ($ph in $phases) {
+            if ($ph -lt $t.phase) { $deps += $phaseTaskIds[$ph] }
+        }
+        $t | Add-Member -NotePropertyName depends_on -NotePropertyValue @($deps) -Force
+    }
+
+    # Ledger'a birleştir (idempotent)
+    $existing = @{}
+    foreach ($e in (Get-LedgerTasks $Ledger)) { $existing[$e.id] = $e }
+
+    $merged = [System.Collections.Generic.List[object]]::new()
+    foreach ($t in $parsed) {
+        if ($existing.ContainsKey($t.id)) {
+            # var olanı koru, sadece açıklayıcı alanları tazele
+            $e = $existing[$t.id]
+            $e.title = $t.title
+            $e | Add-Member -NotePropertyName files      -NotePropertyValue $t.files      -Force
+            $e | Add-Member -NotePropertyName depends_on -NotePropertyValue $t.depends_on  -Force
+            $e | Add-Member -NotePropertyName story      -NotePropertyValue $t.story       -Force
+            $e | Add-Member -NotePropertyName phase      -NotePropertyValue $t.phase       -Force
+            $e | Add-Member -NotePropertyName parallel   -NotePropertyValue $t.parallel    -Force
+            $merged.Add($e)
+        } else {
+            # yeni task
+            $merged.Add([pscustomobject]@{
+                id = $t.id; title = $t.title; status = 'pending'; attempts = 0
+                files = $t.files; depends_on = $t.depends_on; story = $t.story
+                phase = $t.phase; parallel = $t.parallel
+                agent = $null; commit_sha = $null; last_gate_output = $null; updated_at = $null
+            })
+        }
+    }
+    # ledger'da olup tasks.md'de olmayanları da koru (ör. superseded)
+    foreach ($e in (Get-LedgerTasks $Ledger)) {
+        if (-not ($parsed | Where-Object { $_.id -eq $e.id })) { $merged.Add($e) }
+    }
+
+    $Ledger.tasks = @($merged | Sort-Object { [int]($_.id -replace '\D','') })
+    return $Ledger
+}
+
 function Set-DownstreamStale {
     <#
       Bir stage yeniden çalışınca SONRAKİ stage'leri 'stale' işaretler.

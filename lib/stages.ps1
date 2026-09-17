@@ -215,6 +215,20 @@ function Invoke-Stage {
 
     $Ledger.stages.$Name.status = 'completed'
     $featureDir = Get-FeatureDirectory -ProjectRoot $ProjectRoot
+
+    # tasks stage'i bittiğinde üretilen tasks.md'yi ledger'a yükle. Loop'un
+    # girdisi budur; bu olmadan "0 task" kalır.
+    if ($Name -eq 'tasks' -and $featureDir) {
+        $tasksMd = Join-Path $featureDir 'tasks.md'
+        if (Test-Path -LiteralPath $tasksMd) {
+            $Ledger = Import-TasksToLedger -Ledger $Ledger -TasksMdPath $tasksMd
+            $n = @(Get-LedgerTasks $Ledger).Count
+            Write-SddLog -Message "[tasks] $n task ledger'a yüklendi" -LogPath $logPath -Level 'info'
+        } else {
+            Write-SddLog -Message "[tasks] UYARI: tasks.md bulunamadı, ledger'a task yüklenemedi" -LogPath $logPath -Level 'warn'
+        }
+    }
+
     Write-SddLog -Message "[$Name] tamamlandı. feature: $featureDir" -LogPath $logPath -Level 'info'
     return [pscustomobject]@{ ok = $true; stage = $Name; feature_dir = $featureDir; result = $res }
 }

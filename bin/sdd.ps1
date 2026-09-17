@@ -20,7 +20,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('init','spec','plan','tasks','analyze','implement','status','config')]
+    [ValidateSet('init','spec','plan','tasks','analyze','implement','status','config','sync-tasks')]
     [string] $Command,
 
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
@@ -76,6 +76,22 @@ function Invoke-Sdd {
         'status' {
             $root  = Find-ProjectRoot
             $paths = Get-SddPaths -ProjectRoot $root
+            Show-LedgerStatus -StatePath $paths.State
+        }
+        'sync-tasks' {
+            # Mevcut tasks.md'yi (stage'i yeniden çalıştırmadan) ledger'a yükle.
+            $root  = Find-ProjectRoot
+            $paths = Get-SddPaths -ProjectRoot $root
+            $L     = Read-Ledger -StatePath $paths.State
+            $featureDir = Get-FeatureDirectory -ProjectRoot $root
+            if (-not $featureDir) { throw ".specify/feature.json yok — önce spec/plan/tasks çalıştır." }
+            $tasksMd = Join-Path $featureDir 'tasks.md'
+            if (-not (Test-Path -LiteralPath $tasksMd)) { throw "tasks.md bulunamadı: $tasksMd" }
+            $L = Import-TasksToLedger -Ledger $L -TasksMdPath $tasksMd
+            Write-Ledger -Ledger $L -StatePath $paths.State
+            $n = @(Get-LedgerTasks $L).Count
+            Write-Host ""
+            Write-Host "$n task ledger'a yüklendi." -ForegroundColor Green
             Show-LedgerStatus -StatePath $paths.State
         }
         { $_ -in 'spec','plan','tasks' } {
