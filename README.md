@@ -59,22 +59,37 @@ işaretlenmez, build hatasına elle girilmez.
 
 Checkbox'ı her zaman **orkestratör** yazar, agent değil.
 
-## Komutlar (nihai hedef)
+## Komutlar
 
 ```
 sdd init                 projeye .sdd/ iskeletini kurar
 sdd spec   [-Prompt ...]  spec stage'i (-Prompt: düzeltip yeniden çalıştır)
 sdd plan   [-Prompt ...]  plan stage'i
 sdd tasks  [-Prompt ...]  tasks stage'i
-sdd analyze              tutarlılık denetimi (otonom, rapor üretir)
+sdd analyze              tutarlılık denetimi (henüz taslak)
 sdd implement            otonom implement loop (Tier 0 + Tier 1)
+sdd implement -ObserveEvery N   her N başarılı batch'te gözlem molası
 sdd status               ledger özeti
 sdd config               agent/model/effort seçim arayüzü (hafızalı)
 ```
 
-Ortak bayraklar: `-Prompt "<metin>"` (aynı stage'i düzeltmeyle yeniden çalıştır),
-`-Resume` (yarıda kalan stage'i sürdür), `-ObserveEvery N` (loop'ta her N
-batch'te dur).
+`spec`, `plan` ve `tasks` için `-Prompt "<metin>"` aynı stage'i düzeltmeyle
+yeniden çalıştırır; `-Resume` varsa sağlayıcı oturumunu sürdürür. Implement loop
+idempotenttir: tekrar `sdd implement` çağrısı `done` task'ları atlar ve kaldığı
+ledger durumundan devam eder.
+
+### Implement commit sözleşmesi
+
+- Agent yalnızca seçilen batch'i uygular ve implementation commit'ini üretir.
+- Agent `.sdd/**` ve `tasks.md` dosyalarına dokunmaz; hook gerekmez.
+- Orkestratör Tier 0 ve Tier 1 geçtikten sonra ledger ile checkbox'ları yazar ve
+  ayrı bir checkpoint commit'i üretir.
+- Başarısız doğrulamada task `done` olmaz. Ham hata aynı Codex oturumuna verilir,
+  attempt artar ve aynı batch repair commit'iyle yeniden denenir.
+- `escalate_at` sonrasında model değişmez; seçilmiş model korunur ve reasoning
+  effort `high` seviyesine yükselir.
+- `max_attempts`, `circuit_breaker`, manual task veya çözülemeyen bağımlılık
+  döngüyü insana geri verir.
 
 ## Klasör yapısı
 
@@ -86,7 +101,7 @@ lib/
   stages.ps1             stage runner + agent seçim arayüzü + analyze
   tier0.ps1              "iş yapıldı mı" — 9 git/dosya kontrolü
   tier1.ps1              "proje ayakta mı" — gate çalıştırıcı
-  loop.ps1               otonom döngü: batch, retry, circuit breaker, repair
+  loop.ps1               otonom döngü: batch, retry, escalation, circuit breaker
   adapters/
     claude.ps1           Claude Code CLI
     codex.ps1            Codex CLI
@@ -103,10 +118,10 @@ girdi `{prompt, model, effort, resume_session, cwd, log_path, allowed_tools}`,
 
 ## İnşa durumu
 
-Bu commit: **iskelet + şemalar + boş fonksiyon taslakları.** Çalışır kod yok;
-her fonksiyon imzası, akışı yorumda anlatılmış ve `NotImplementedException`
-fırlatıyor. `config.default.yaml` ve `state.schema.json` gerçek içeriktir.
+Çalışan parçalar: `init`, `status`, `sync-tasks`, `spec`, `plan`, `tasks`, Codex
+adapteri ve Tier 0 + Tier 1 implement loop. Loop için PowerShell parse, Tier 0,
+Tier 1, ledger render ve iki batch'lik uçtan uca fake-agent testleri `tests/`
+altındadır.
 
-Sonraki adımlar (sırayla): `common.ps1` + `ledger.ps1` (init + state), sonra
-`stages.ps1` (seçim arayüzü + tek stage runner), sonra tier'lar, en son `loop.ps1`.
-```
+Henüz taslak olan parçalar: `analyze`, interaktif `config` seçimi ve Claude /
+Cursor adapter bağlantıları. Tier 2 semantik doğrulama da kapsam dışıdır.

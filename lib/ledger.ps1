@@ -98,40 +98,66 @@ function Set-TaskStatus {
 
 function Render-TasksMd {
     <#
-      Ledger'dan tasks.md üretir. Format kullanıcının örneğine birebir:
-        [ ] T001 <title>       (pending)
-        [x] T001 <title>       (done)
-      blocked task'lar checkbox açık kalır, altına yorum düşülür:
-        [ ] T042 <title>
-            <!-- blocked: N deneme, <gate özeti> -->
-      Böylece "yapılmadı" ile "denendi düştü" ayırt edilir.
+      Ledger durumunu mevcut Spec Kit tasks.md üzerine işler. Başlıklar,
+      phase/story bölümleri ve açıklamalar korunur; yalnızca checkbox ile
+      orkestratöre ait sdd-status yorumu güncellenir. Dosya baştan render
+      edilse phase bilgisi kaybolur ve sonraki sync-tasks bağımlılıkları
+      bozardı.
     #>
     param(
         [Parameter(Mandatory)] [object] $Ledger,
         [Parameter(Mandatory)] [string] $OutPath
     )
-    $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.AppendLine('# Tasks')
-    [void]$sb.AppendLine('')
-    foreach ($t in Get-LedgerTasks $Ledger) {
-        $box = if ($t.status -eq 'done') { '[x]' } else { '[ ]' }
-        [void]$sb.AppendLine("- $box $($t.id) $($t.title)")
-        if ($t.status -eq 'blocked') {
-            $note = "blocked: $($t.attempts) deneme"
-            if ($t.PSObject.Properties.Name -contains 'last_gate_output' -and $t.last_gate_output) {
-                $first = ($t.last_gate_output -split "`r?`n" | Select-Object -First 1)
-                $note += ", $first"
+    $byId = @{}
+    foreach ($task in Get-LedgerTasks $Ledger) { $byId[$task.id] = $task }
+
+    $source = if (Test-Path -LiteralPath $OutPath) { @(Get-Content -LiteralPath $OutPath) } else { @('# Tasks','') }
+    $result = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($line in $source) {
+        # Önceki render'dan kalan orkestratör notunu yeniden üretmek üzere atla.
+        if ($line -match '^\s*<!--\s*sdd-status:') { continue }
+
+        if ($line -match '^(\s*-\s*)\[[ xX]\](\s*)(T\d{3,})(\s+.*)$') {
+            $id = $Matches[3]
+            if ($byId.ContainsKey($id)) {
+                $task = $byId[$id]
+                $box = if ($task.status -eq 'done') { '[x]' } else { '[ ]' }
+                $result.Add("$($Matches[1])$box$($Matches[2])$id$($Matches[4])")
+                [void]$seen.Add($id)
+
+                $note = $null
+                if ($task.status -eq 'blocked') {
+                    $note = "blocked; attempts=$($task.attempts)"
+                    if ($task.PSObject.Properties.Name -contains 'last_gate_output' -and $task.last_gate_output) {
+                        $first = ([string]$task.last_gate_output -split "`r?`n" | Select-Object -First 1)
+                        $note += "; $first"
+                    }
+                } elseif ($task.status -eq 'superseded') {
+                    $note = 'superseded'
+                } elseif ($task.status -eq 'manual') {
+                    $note = 'manual; otonom loop dışında'
+                }
+                if ($note) { $result.Add("  <!-- sdd-status: $note -->") }
+                continue
             }
-            [void]$sb.AppendLine("      <!-- $note -->")
         }
-        elseif ($t.status -eq 'superseded') {
-            [void]$sb.AppendLine("      <!-- superseded -->")
-        }
-        elseif ($t.status -eq 'manual') {
-            [void]$sb.AppendLine("      <!-- manual: otonom loop dışında -->")
+        $result.Add([string]$line)
+    }
+
+    $missing = @(Get-LedgerTasks $Ledger | Where-Object { -not $seen.Contains($_.id) })
+    if ($missing.Count -gt 0) {
+        $result.Add('')
+        $result.Add('## Orchestrator Tasks')
+        $result.Add('')
+        foreach ($task in $missing) {
+            $box = if ($task.status -eq 'done') { '[x]' } else { '[ ]' }
+            $result.Add("- $box $($task.id) $($task.title)")
         }
     }
-    Set-Content -LiteralPath $OutPath -Value $sb.ToString() -Encoding utf8
+
+    Set-Content -LiteralPath $OutPath -Value $result -Encoding utf8
 }
 
 function Import-TasksToLedger {
