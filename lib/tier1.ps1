@@ -168,9 +168,17 @@ function Invoke-Tier1 {
 
         $result = Invoke-GateCommand -Gate $gate -ProjectRoot $ProjectRoot -LogPath $logPath
         $wasKnownBroken = ($null -ne $base -and [bool]$base.available -and -not [bool]$base.passing)
+        $wasUnavailable = ($null -ne $base -and -not [bool]$base.available)
 
         if ($wasKnownBroken -and -not $result.ok) {
             Write-SddLog -Message "[Tier 1/$name] baseline'da da kırık; batch'e yüklenmedi" -LogPath $logPath -Level 'warn'
+            continue
+        }
+        if ($wasUnavailable -and -not $result.ok) {
+            # Sıfır projede package script'i kaynak dosyalardan daha erken
+            # doğabilir. Gate ilk kez yeşil olana kadar probation'dadır; ilk
+            # geçişinden sonra baseline'a latch edilir ve artık bozulamaz.
+            Write-SddLog -Message "[Tier 1/$name] yeni gate henüz yeşil değil; ilk başarılı geçişe kadar ertelendi" -LogPath $logPath -Level 'warn'
             continue
         }
         if (-not $result.ok) {

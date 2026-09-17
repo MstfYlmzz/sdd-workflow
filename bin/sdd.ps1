@@ -57,6 +57,7 @@ function Show-Help {
     Write-Host "  sdd status      ledger özeti"
     Write-Host "  sdd spec|plan|tasks      Spec Kit stage'ini çalıştırır"
     Write-Host "  sdd implement [-ObserveEvery N]   otonom implement loop"
+    Write-Host "  sdd implement -RevalidateFrom SHA -CandidateCommit SHA   mevcut candidate'ı agentsız doğrula"
     Write-Host "  sdd analyze|config       (yapım aşamasında)"
     Write-Host ""
 }
@@ -136,6 +137,8 @@ function Invoke-Sdd {
             $L     = Read-Ledger -StatePath $paths.State
 
             $observeEvery = -1
+            $revalidateFrom = ''
+            $candidateCommit = ''
             $restArr = @($Rest)
             for ($i = 0; $i -lt $restArr.Count; $i++) {
                 switch -Regex ($restArr[$i]) {
@@ -147,11 +150,26 @@ function Invoke-Sdd {
                         continue
                     }
                     '^-Resume$' { continue } # loop zaten idempotent resume eder
+                    '^-RevalidateFrom$' {
+                        if ($i + 1 -ge $restArr.Count -or [string]::IsNullOrWhiteSpace($restArr[$i + 1])) {
+                            throw '-RevalidateFrom için bir git commit SHA gerekli.'
+                        }
+                        $revalidateFrom = $restArr[++$i]
+                        continue
+                    }
+                    '^-CandidateCommit$' {
+                        if ($i + 1 -ge $restArr.Count -or [string]::IsNullOrWhiteSpace($restArr[$i + 1])) {
+                            throw '-CandidateCommit için bir git commit SHA gerekli.'
+                        }
+                        $candidateCommit = $restArr[++$i]
+                        continue
+                    }
                     default { throw "Bilinmeyen implement argümanı: $($restArr[$i])" }
                 }
             }
 
-            $res = Invoke-ImplementLoop -Config $cfg -Ledger $L -ProjectRoot $root -ObserveEvery $observeEvery
+            $res = Invoke-ImplementLoop -Config $cfg -Ledger $L -ProjectRoot $root -ObserveEvery $observeEvery `
+                                        -RevalidateFrom $revalidateFrom -CandidateCommit $candidateCommit
             Write-Host ""
             if ($res.ok -and $res.reason -eq 'completed') {
                 Write-Host "[implement] tamamlandı — tüm otonom tasklar geçti." -ForegroundColor Green

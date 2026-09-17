@@ -206,13 +206,77 @@ function Update-FailedBatch {
     return @($blocked)
 }
 
+function Invoke-BatchValidation {
+    param(
+        [Parameter(Mandatory)] [object] $Config,
+        [Parameter(Mandatory)] [object] $Ledger,
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [string] $Baseline,
+        [Parameter(Mandatory)] [object[]] $Batch,
+        [Parameter(Mandatory)] [string] $LogPath
+    )
+
+    $tier0Fails = [System.Collections.Generic.List[string]]::new()
+    $tier0Warnings = [System.Collections.Generic.List[string]]::new()
+    foreach ($task in $Batch) {
+        $t0 = Invoke-Tier0 -ProjectRoot $ProjectRoot -Baseline $Baseline -Task $task
+        foreach ($item in @($t0.hard_fails)) { if ($item) { $tier0Fails.Add([string]$item) } }
+        foreach ($item in @($t0.warnings)) { if ($item) { $tier0Warnings.Add([string]$item) } }
+    }
+    foreach ($warning in @($tier0Warnings | Select-Object -Unique)) {
+        Write-SddLog -Message "[Tier 0 warning] $warning" -LogPath $LogPath -Level 'warn'
+    }
+
+    if ($tier0Fails.Count -gt 0) {
+        return [pscustomobject]@{
+            ok = $false; kind = 'tier0_failed'
+            output = "Tier 0 failed:`n$(@($tier0Fails | Select-Object -Unique) -join "`n")"
+        }
+    }
+
+    $t1 = Invoke-Tier1 -Config $Config -ProjectRoot $ProjectRoot -Ledger $Ledger
+    if (-not $t1.ok) {
+        return [pscustomobject]@{ ok = $false; kind = 'tier1_failed'; output = "Tier 1 failed:`n$($t1.output)" }
+    }
+    return [pscustomobject]@{ ok = $true; kind = $null; output = $null }
+}
+
+function Resolve-RevalidationCommit {
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [string] $Baseline,
+        [Parameter(Mandatory)] [string] $CandidateCommit
+    )
+
+    $resolved = Invoke-GitCapture -ProjectRoot $ProjectRoot -Arguments @('rev-parse','--verify',"$CandidateCommit^{commit}") -AllowFailure
+    if ($resolved.ExitCode -ne 0) { throw "Candidate commit bulunamadı: $CandidateCommit" }
+    $sha = $resolved.Text.Trim()
+    $links = @(
+        [pscustomobject]@{ From = $Baseline; To = $sha }
+        [pscustomobject]@{ From = $sha; To = 'HEAD' }
+    )
+    foreach ($link in $links) {
+        $ancestor = Invoke-GitCapture -ProjectRoot $ProjectRoot -Arguments @('merge-base','--is-ancestor',$link.From,$link.To) -AllowFailure
+        if ($ancestor.ExitCode -ne 0) {
+            throw "Revalidation zinciri geçersiz: $Baseline -> $sha -> HEAD olmalı."
+        }
+    }
+    return $sha
+}
+
 function Invoke-ImplementLoop {
     param(
         [Parameter(Mandatory)] [object] $Config,
         [Parameter(Mandatory)] [object] $Ledger,
         [Parameter(Mandatory)] [string] $ProjectRoot,
-        [int] $ObserveEvery = -1
+        [int] $ObserveEvery = -1,
+        [string] $RevalidateFrom,
+        [string] $CandidateCommit
     )
+
+    if ($RevalidateFrom -and -not $CandidateCommit) {
+        throw '-RevalidateFrom ile birlikte -CandidateCommit gerekli.'
+    }
 
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
     $featureDir = Get-FeatureDirectory -ProjectRoot $ProjectRoot
@@ -259,6 +323,7 @@ function Invoke-ImplementLoop {
     $completedThisRun = 0
     $attemptedBatches = 0
     $retryFailure = $null
+    $revalidatePending = -not [string]::IsNullOrWhiteSpace($RevalidateFrom)
     $resumeSession = if ($previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')) {
         [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Default '')
     } else { '' }
@@ -295,6 +360,49 @@ function Invoke-ImplementLoop {
             return [pscustomobject]@{ ok = $false; reason = 'dependency_deadlock'; output = $failure; batches = $attemptedBatches }
         }
 
+        if ($revalidatePending) {
+            $revalidatePending = $false
+            $attemptedBatches++
+            $ids = @($batch.id) -join ', '
+            $candidateSha = Resolve-RevalidationCommit -ProjectRoot $ProjectRoot -Baseline $RevalidateFrom -CandidateCommit $CandidateCommit
+            Write-SddLog -Message "[implement] mevcut candidate yeniden doğrulanıyor: $ids | $($candidateSha.Substring(0, 8))" -LogPath $logPath -Level 'info'
+
+            $validation = Invoke-BatchValidation -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot `
+                                                   -Baseline $RevalidateFrom -Batch $batch -LogPath $logPath
+            if (-not $validation.ok) {
+                Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $validation.output
+                Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason 'revalidation_failed' -Profile $baseProfile
+                $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message "sdd: record failed revalidation $ids" -StateOnly
+                Write-SddLog -Message $validation.output -LogPath $logPath -Level 'error'
+                return [pscustomobject]@{ ok = $false; reason = 'revalidation_failed'; output = $validation.output; batches = $attemptedBatches }
+            }
+
+            foreach ($task in $batch) {
+                $fields = @{
+                    attempts = [Math]::Max(1, [int]$task.attempts)
+                    agent = [string](Get-WorkflowProperty -Object $baseProfile -Name 'agent')
+                    commit_sha = $candidateSha
+                    last_gate_output = $null
+                }
+                $null = Set-TaskStatus -Ledger $Ledger -TaskId $task.id -Status 'done' -Fields $fields
+            }
+            $consecutiveFailures = 0
+            $completedThisRun++
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $null
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $null
+            Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $baseProfile
+            $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message "sdd: revalidate tasks $ids"
+            Write-SddLog -Message "[implement] yeniden doğrulama geçti: $ids @ $($candidateSha.Substring(0, 8))" -LogPath $logPath -Level 'info'
+
+            if ($ObserveEvery -gt 0 -and ($completedThisRun % $ObserveEvery) -eq 0) {
+                Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason 'observe_pause' -Profile $baseProfile
+                $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message 'sdd: observation pause'
+                return [pscustomobject]@{ ok = $true; reason = 'observe_pause'; batches = $attemptedBatches }
+            }
+            continue
+        }
+
         $attemptedBatches++
         $nextAttempt = (@($batch | ForEach-Object { [int]$_.attempts } | Measure-Object -Maximum).Maximum) + 1
         $profile = if ($nextAttempt -ge $escalateAt) { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt $nextAttempt } else { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt 1 }
@@ -323,29 +431,10 @@ function Invoke-ImplementLoop {
             return [pscustomobject]@{ ok = $false; reason = 'agent_interrupted'; output = $failure; batches = $attemptedBatches }
         }
 
-        $tier0Fails = [System.Collections.Generic.List[string]]::new()
-        $tier0Warnings = [System.Collections.Generic.List[string]]::new()
-        foreach ($task in $batch) {
-            $t0 = Invoke-Tier0 -ProjectRoot $ProjectRoot -Baseline $baseline -Task $task
-            foreach ($item in @($t0.hard_fails)) { if ($item) { $tier0Fails.Add([string]$item) } }
-            foreach ($item in @($t0.warnings)) { if ($item) { $tier0Warnings.Add([string]$item) } }
-        }
-        foreach ($warning in @($tier0Warnings | Select-Object -Unique)) {
-            Write-SddLog -Message "[Tier 0 warning] $warning" -LogPath $logPath -Level 'warn'
-        }
-
-        $failureReason = $null
-        $failureKind = $null
-        if ($tier0Fails.Count -gt 0) {
-            $failureKind = 'tier0_failed'
-            $failureReason = "Tier 0 failed:`n$(@($tier0Fails | Select-Object -Unique) -join "`n")"
-        } else {
-            $t1 = Invoke-Tier1 -Config $Config -ProjectRoot $ProjectRoot -Ledger $Ledger
-            if (-not $t1.ok) {
-                $failureKind = 'tier1_failed'
-                $failureReason = "Tier 1 failed:`n$($t1.output)"
-            }
-        }
+        $validation = Invoke-BatchValidation -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot `
+                                               -Baseline $baseline -Batch $batch -LogPath $logPath
+        $failureReason = $validation.output
+        $failureKind = $validation.kind
 
         if ($failureReason) {
             $consecutiveFailures++

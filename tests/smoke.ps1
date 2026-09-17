@@ -44,6 +44,14 @@ try {
     $badTier0 = Invoke-Tier0 -ProjectRoot $fixture -Baseline $badBaseline -Task $task
     Assert-True (-not $badTier0.ok) 'Tier 0 yeni TODO satırını reddetmeli.'
 
+    $nameBaseline = Get-GitBaseline -ProjectRoot $fixture
+    Set-Content -LiteralPath (Join-Path $fixture 'package.json') -Value @('{','  "name": "todo-list"','}') -Encoding utf8
+    & git -C $fixture add package.json
+    & git -C $fixture commit --quiet -m 'valid todo-list package name'
+    $nameTask = [pscustomobject]@{ id = 'T002'; title = 'add package'; files = @('package.json') }
+    $nameTier0 = Invoke-Tier0 -ProjectRoot $fixture -Baseline $nameBaseline -Task $nameTask
+    Assert-True $nameTier0.ok 'todo-list ürün adı TODO placeholder sayılmamalı.'
+
     $ledger = [pscustomobject]@{
         tasks = @([pscustomobject]@{
             id = 'T001'; title = 'different ledger title'; status = 'done'; attempts = 1
@@ -71,6 +79,13 @@ try {
     $config.gates = @($passGate, $newBroken)
     $tier1New = Invoke-Tier1 -Config $config -ProjectRoot $fixture -Ledger $gateLedger
     Assert-True (-not $tier1New.ok) 'Baseline sonrasında eklenen kırık gate Tier 1 fail olmalı.'
+
+    $probationGate = [pscustomobject]@{ name = 'probation'; cmd = 'git rev-parse --verify refs/heads/not-ready-yet' }
+    $probationLedger = [pscustomobject]@{ gate_baseline = [pscustomobject]@{
+        probation = [pscustomobject]@{ available = $false; passing = $false; measured_at = (Get-Date).ToString('o') }
+    } }
+    $probationResult = Invoke-Tier1 -Config ([pscustomobject]@{ gates = @($probationGate) }) -ProjectRoot $fixture -Ledger $probationLedger
+    Assert-True $probationResult.ok 'Başlangıçta unavailable gate ilk yeşil geçişine kadar ertelenmeli.'
 
     $profile = Get-EscalatedProfile -BaseProfile ([pscustomobject]@{ agent='codex'; model='gpt-5.6-sol'; effort='medium' }) -Attempt 2
     Assert-True ($profile.model -eq 'gpt-5.6-sol' -and $profile.effort -eq 'high') 'Escalation modeli sabit tutup effort yükseltmeli.'

@@ -147,7 +147,9 @@ function Test-FilesSubstantial {
 function Test-NoPlaceholders {
     param($AddedLines)
     $hits = @($AddedLines | Where-Object {
-        $_ -match '(?i)\b(TODO|FIXME)\b|not\s+implemented|NotImplementedException'
+        # Tireyi de identifier parçası say: "todo-list" gibi gerçek ürün/paket
+        # adları TODO marker'ı değildir; "TODO:" ve "FIXME(" yine yakalanır.
+        $_ -match '(?i)(?<![\w-])(TODO|FIXME)(?![\w-])|not\s+implemented|NotImplementedException'
     } | Select-Object -First 10)
     if ($hits.Count -gt 0) {
         return New-Tier0Check -HardFails @("Eklenen satırlarda placeholder bulundu: $($hits -join ' | ')")

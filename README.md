@@ -69,6 +69,8 @@ sdd tasks  [-Prompt ...]  tasks stage'i
 sdd analyze              tutarlılık denetimi (henüz taslak)
 sdd implement            otonom implement loop (Tier 0 + Tier 1)
 sdd implement -ObserveEvery N   her N başarılı batch'te gözlem molası
+sdd implement -RevalidateFrom BASE -CandidateCommit COMMIT
+                         başarısız validator sonrası mevcut commit'i agentsız doğrula
 sdd status               ledger özeti
 sdd config               agent/model/effort seçim arayüzü (hafızalı)
 ```
@@ -77,6 +79,12 @@ sdd config               agent/model/effort seçim arayüzü (hafızalı)
 yeniden çalıştırır; `-Resume` varsa sağlayıcı oturumunu sürdürür. Implement loop
 idempotenttir: tekrar `sdd implement` çağrısı `done` task'ları atlar ve kaldığı
 ledger durumundan devam eder.
+
+Validator hatası düzeltilirken agent'ın ürettiği commit zaten doğruysa aynı
+işi ve token harcamasını tekrarlamak gerekmez. `-RevalidateFrom`, batch öncesi
+commit'i; `-CandidateCommit` ise agent'ın implementation commit'ini alır. Loop
+bu zincirin `BASE -> COMMIT -> HEAD` olduğunu doğrular, mevcut pending batch'e
+Tier 0 + Tier 1 uygular ve agent çağırmadan checkpoint üretir.
 
 ### Implement commit sözleşmesi
 

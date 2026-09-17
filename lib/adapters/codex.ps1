@@ -30,12 +30,8 @@ function Invoke-CodexAgent {
     $codexArgs = [System.Collections.Generic.List[string]]::new()
     $codexArgs.Add('exec')
 
-    # Resume: prompt yerine "resume <id>" gelir, prompt yine de eklenebilir
-    if ($Request.ContainsKey('resume_session') -and $Request.resume_session) {
-        $codexArgs.Add('resume')
-        $codexArgs.Add([string]$Request.resume_session)
-    }
-
+    # exec seçenekleri subcommand'den ÖNCE gelmeli. Özellikle -s/-C/-c,
+    # `codex exec resume` sonrasında geçerli ResumeArgs değildir.
     if ($Request.ContainsKey('model') -and $Request.model) {
         $codexArgs.Add('-m'); $codexArgs.Add([string]$Request.model)
     }
@@ -59,7 +55,13 @@ function Invoke-CodexAgent {
 
     $codexArgs.Add('--json')
 
-    # Prompt en sona (resume'da bile ek talimat olarak geçerli)
+    # Resume subcommand'i tüm exec seçeneklerinden sonra gelir.
+    if ($Request.ContainsKey('resume_session') -and $Request.resume_session) {
+        $codexArgs.Add('resume')
+        $codexArgs.Add([string]$Request.resume_session)
+    }
+
+    # Prompt en sona; resume'da SESSION_ID'den sonraki positional prompt'tur.
     if ($Request.ContainsKey('prompt') -and $Request.prompt) {
         $codexArgs.Add([string]$Request.prompt)
     }
@@ -71,7 +73,8 @@ function Invoke-CodexAgent {
         last_message = $null
         log_path     = $Request.log_path
     }
-    $sawTurnCompleted = $false
+    $script:__sawTurn = $false
+    $cliExitCode = 0
     $messageParts = [System.Collections.Generic.List[string]]::new()
 
     # codex'i çalıştır, JSONL'i satır satır CANLI işle (pipeline streaming)
@@ -79,6 +82,11 @@ function Invoke-CodexAgent {
         $line = [string]$_
         Read-CodexEvent -Line $line -Result $result -MessageParts $messageParts `
                         -OnTurnCompleted { $script:__sawTurn = $true } -LogPath $Request.log_path
+    }
+    $cliExitCode = $LASTEXITCODE
+
+    if ($cliExitCode -ne 0) {
+        $result.denied.Add("Codex CLI exit code: $cliExitCode")
     }
 
     # son mesajı dosyadan al (varsa), yoksa toplanan parçalardan
@@ -91,7 +99,7 @@ function Invoke-CodexAgent {
         $result.last_message = ($messageParts -join "`n")
     }
 
-    $result.ok = $script:__sawTurn -and ($result.denied.Count -eq 0)
+    $result.ok = [bool]$script:__sawTurn -and ($result.denied.Count -eq 0)
     $result.denied = @($result.denied)
     Remove-Variable -Scope script -Name __sawTurn -ErrorAction SilentlyContinue
     return [pscustomobject]$result
