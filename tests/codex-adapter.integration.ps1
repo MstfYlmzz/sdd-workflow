@@ -12,22 +12,16 @@ function Assert-True([bool] $Condition, [string] $Message) {
 
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ("sdd-codex-adapter-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-$oldPath = $env:PATH
 try {
-    $mock = Join-Path $fixture 'codex'
     $capture = Join-Path $fixture 'args.txt'
-    $scriptBody = @'
-#!/bin/sh
-printf '%s\n' "$@" > "$CODEX_MOCK_ARGS"
-printf '%s\n' '{"type":"thread.started","thread_id":"mock-session"}'
-printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"mock done"}}'
-printf '%s\n' '{"type":"turn.completed","usage":{}}'
-exit 0
-'@
-    Set-Content -LiteralPath $mock -Value $scriptBody -Encoding utf8NoBOM
-    & chmod +x $mock
-    $env:PATH = "${fixture}:$oldPath"
-    $env:CODEX_MOCK_ARGS = $capture
+    $global:CODEX_MOCK_CAPTURE = $capture
+    function global:codex {
+        Set-Content -LiteralPath $global:CODEX_MOCK_CAPTURE -Value @($args) -Encoding utf8
+        '{"type":"thread.started","thread_id":"mock-session"}'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"mock done"}}'
+        '{"type":"turn.completed","usage":{}}'
+        $global:LASTEXITCODE = 0
+    }
 
     $result = Invoke-CodexAgent -Request @{
         prompt = 'repair prompt'; model = 'gpt-5.6-sol'; effort = 'high'
@@ -48,7 +42,7 @@ exit 0
     Assert-True ($argsSeen[$resumeIndex + 2] -eq 'repair prompt') 'Resume prompt session id sonrasında olmalı.'
     Write-Host 'CODEX ADAPTER INTEGRATION OK' -ForegroundColor Green
 } finally {
-    $env:PATH = $oldPath
-    Remove-Item Env:CODEX_MOCK_ARGS -ErrorAction SilentlyContinue
+    Remove-Item Function:\global:codex -ErrorAction SilentlyContinue
+    Remove-Variable -Scope global -Name CODEX_MOCK_CAPTURE -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
 }

@@ -56,11 +56,12 @@ function New-RepairTask {
 
     $numbers = @(Get-LedgerTasks $Ledger | ForEach-Object { [int]($_.id -replace '\D','') })
     $next = if ($numbers.Count -gt 0) { ($numbers | Measure-Object -Maximum).Maximum + 1 } else { 1 }
-    $id = 'T{0:D3}' -f $next
+    $id = 'T{0:D3}' -f ([int]$next)
     $first = ($GateOutput -split "`r?`n" | Select-Object -First 1)
     $task = [pscustomobject]@{
         id = $id; title = "Repair Tier 1 failure: $first"; status = 'pending'; attempts = 0
         files = @(); depends_on = @(); story = $null; phase = 0; parallel = $false
+        strict_gates = $true
         agent = $null; commit_sha = $null; last_gate_output = $GateOutput; updated_at = (Get-Date).ToString('o')
     }
     $Ledger.tasks = @($task) + @(Get-LedgerTasks $Ledger)
@@ -234,7 +235,8 @@ function Invoke-BatchValidation {
         }
     }
 
-    $t1 = Invoke-Tier1 -Config $Config -ProjectRoot $ProjectRoot -Ledger $Ledger
+    $strictTier1 = @($Batch | Where-Object { [bool](Get-WorkflowProperty -Object $_ -Name 'strict_gates' -Default $false) }).Count -gt 0
+    $t1 = Invoke-Tier1 -Config $Config -ProjectRoot $ProjectRoot -Ledger $Ledger -Strict:$strictTier1
     if (-not $t1.ok) {
         return [pscustomobject]@{ ok = $false; kind = 'tier1_failed'; output = "Tier 1 failed:`n$($t1.output)" }
     }
@@ -310,6 +312,21 @@ function Invoke-ImplementLoop {
         throw "Implement loop temiz çalışma ağacıyla başlamalı. Önce commit/stash yap: $($dirty -join ' | ')"
     }
 
+    # Validator recovery agentsız kalmalıdır. Normal implement girişinde ise
+    # analyze otomatik ve read-only çalışır; kritik eşik loop'u durdurur.
+    if (-not $RevalidateFrom) {
+        $analysis = Invoke-Analyze -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot
+        if (-not $analysis.ok -or $analysis.blocked) {
+            $why = if ($analysis.output) { $analysis.output } else { "Analyze $($analysis.severity) bulguyla implement'i durdurdu: $($analysis.summary)" }
+            Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason 'analyze_blocked' -Profile $baseProfile
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $why
+            $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message 'sdd: stop on analyze findings' -StateOnly
+            Write-SddLog -Message $why -LogPath $logPath -Level 'error'
+            return [pscustomobject]@{ ok = $false; reason = 'analyze_blocked'; output = $why; batches = 0 }
+        }
+        Write-SddLog -Message "[analyze] geçti: severity=$($analysis.severity), findings=$($analysis.finding_count)" -LogPath $logPath -Level 'info'
+    }
+
     if (-not (Get-WorkflowProperty -Object $Ledger -Name 'gate_baseline')) {
         Set-WorkflowProperty -Object $Ledger -Name 'gate_baseline' -Value ([pscustomobject]@{})
     }
@@ -336,6 +353,18 @@ function Invoke-ImplementLoop {
                 Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason 'manual_tasks' -Profile $baseProfile
                 $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message 'sdd: pause for manual tasks'
                 return [pscustomobject]@{ ok = $false; reason = 'manual_tasks'; manual = @($manual.id); batches = $attemptedBatches }
+            }
+
+            Write-SddLog -Message '[implement] final strict Tier 1 doğrulaması' -LogPath $logPath -Level 'info'
+            $finalGate = Invoke-Tier1 -Config $Config -ProjectRoot $ProjectRoot -Ledger $Ledger -Strict
+            if (-not $finalGate.ok) {
+                $failure = "Final Tier 1 failed:`n$($finalGate.output)"
+                $repair = New-RepairTask -Ledger $Ledger -GateOutput $failure
+                Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $failure
+                Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'final_gate_repair' -Profile $baseProfile
+                $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message "sdd: add final gate repair $($repair.id)"
+                Write-SddLog -Message "[implement] final gate için repair task eklendi: $($repair.id)" -LogPath $logPath -Level 'warn'
+                continue
             }
             Set-ImplementStageState -Ledger $Ledger -Status 'completed' -Reason 'all_done' -Profile $baseProfile
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0

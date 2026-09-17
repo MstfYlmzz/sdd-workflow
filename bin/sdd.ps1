@@ -11,7 +11,7 @@
     sdd spec      [-Prompt]  spec stage'ini çalıştırır
     sdd plan      [-Prompt]  plan stage'ini çalıştırır
     sdd tasks     [-Prompt]  tasks stage'ini çalıştırır
-    sdd analyze              analyze stage'ini çalıştırır        (henüz taslak)
+    sdd analyze              read-only tutarlılık analizini çalıştırır
     sdd implement            Tier 0 + Tier 1 implement loop'unu başlatır
     sdd status               ledger özetini gösterir
     sdd config               stage seçim arayüzünü açar          (henüz taslak)
@@ -56,9 +56,10 @@ function Show-Help {
     Write-Host "  sdd init        projeye .sdd/ kurar"
     Write-Host "  sdd status      ledger özeti"
     Write-Host "  sdd spec|plan|tasks      Spec Kit stage'ini çalıştırır"
+    Write-Host "  sdd analyze              read-only tutarlılık analizi"
     Write-Host "  sdd implement [-ObserveEvery N]   otonom implement loop"
     Write-Host "  sdd implement -RevalidateFrom SHA -CandidateCommit SHA   mevcut candidate'ı agentsız doğrula"
-    Write-Host "  sdd analyze|config       (yapım aşamasında)"
+    Write-Host "  sdd config               (yapım aşamasında)"
     Write-Host ""
 }
 
@@ -129,6 +130,25 @@ function Invoke-Sdd {
                 Write-Host ""
                 Write-Host "[$Command] başarısız — .sdd/logs/$Command.log'a bak." -ForegroundColor Red
             }
+        }
+        'analyze' {
+            $root  = Find-ProjectRoot
+            $paths = Get-SddPaths -ProjectRoot $root
+            $cfg   = Read-SddConfig -ConfigPath $paths.Config
+            $L     = Read-Ledger -StatePath $paths.State
+            $res   = Invoke-Analyze -Config $cfg -Ledger $L -ProjectRoot $root -Force
+            Write-Ledger -Ledger $L -StatePath $paths.State
+
+            Write-Host ""
+            if (-not $res.ok) {
+                Write-Host "[analyze] başarısız: $($res.output)" -ForegroundColor Red
+            } elseif ($res.blocked) {
+                Write-Host "[analyze] implement engellendi — severity=$($res.severity), findings=$($res.finding_count)" -ForegroundColor Red
+                if ($res.summary) { Write-Host "  $($res.summary)" -ForegroundColor DarkYellow }
+            } else {
+                Write-Host "[analyze] geçti — severity=$($res.severity), findings=$($res.finding_count)" -ForegroundColor Green
+            }
+            Write-Host ""
         }
         'implement' {
             $root  = Find-ProjectRoot

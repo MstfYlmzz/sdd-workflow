@@ -145,7 +145,8 @@ function Invoke-Tier1 {
     param(
         [Parameter(Mandatory)] [object] $Config,
         [Parameter(Mandatory)] [string] $ProjectRoot,
-        [Parameter(Mandatory)] [object] $Ledger
+        [Parameter(Mandatory)] [object] $Ledger,
+        [switch] $Strict
     )
 
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
@@ -153,9 +154,17 @@ function Invoke-Tier1 {
     foreach ($gate in @($Config.gates)) {
         $name = [string](Get-GateProperty -Gate $gate -Name 'name')
         if (-not $name) { continue }
+        $requiredValue = Get-GateProperty -Gate $gate -Name 'required'
+        $required = if ($null -eq $requiredValue) { $true } else { [bool]$requiredValue }
 
         $availableNow = Test-GateAvailable -Gate $gate -ProjectRoot $ProjectRoot
         if (-not $availableNow) {
+            if ($Strict -and $required) {
+                return [pscustomobject]@{
+                    ok = $false; failed_gate = $name
+                    output = "[$name unavailable] Strict final doğrulamada config'deki gate kullanılabilir olmalı: $([string](Get-GateProperty -Gate $gate -Name 'cmd'))"
+                }
+            }
             Write-SddLog -Message "[Tier 1/$name] atlandı (projede tanımlı değil)" -LogPath $logPath -Level 'info'
             continue
         }
@@ -170,11 +179,16 @@ function Invoke-Tier1 {
         $wasKnownBroken = ($null -ne $base -and [bool]$base.available -and -not [bool]$base.passing)
         $wasUnavailable = ($null -ne $base -and -not [bool]$base.available)
 
-        if ($wasKnownBroken -and -not $result.ok) {
+        if (-not $required -and -not $result.ok) {
+            Write-SddLog -Message "[Tier 1/$name] optional gate başarısız; bloklamadı" -LogPath $logPath -Level 'warn'
+            continue
+        }
+
+        if (-not $Strict -and $wasKnownBroken -and -not $result.ok) {
             Write-SddLog -Message "[Tier 1/$name] baseline'da da kırık; batch'e yüklenmedi" -LogPath $logPath -Level 'warn'
             continue
         }
-        if ($wasUnavailable -and -not $result.ok) {
+        if (-not $Strict -and $wasUnavailable -and -not $result.ok) {
             # Sıfır projede package script'i kaynak dosyalardan daha erken
             # doğabilir. Gate ilk kez yeşil olana kadar probation'dadır; ilk
             # geçişinden sonra baseline'a latch edilir ve artık bozulamaz.

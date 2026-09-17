@@ -39,6 +39,8 @@ Her projede → burada düzelt. Sadece bu projede → proje `config.yaml`'ı.
                                                        │      │(retry, max 3)
                                                   checkbox+commit
                                                           │
+                                                final strict Tier 1
+                                                          │
 [SEN DEVRALIRSIN] ◀── hepsi bitti · blocked · circuit breaker
 ```
 
@@ -53,7 +55,9 @@ işaretlenmez, build hatasına elle girilmez.
   Her projede aynı. (`lib/tier0.ps1`)
 - **Tier 1 — "yapılan iş projeyi bozdu mu?"** Projenin kendi komutlarını
   (`config.gates`) çalıştırır, exit code'a bakar. Komut projede yoksa atlar;
-  sadece baseline'a eklenen yeni hataları suçlar. (`lib/tier1.ps1`)
+  sadece baseline'a eklenen yeni hataları suçlar. Son task'tan sonra ise bütün
+  `required` gate'ler strict modda mevcut ve yeşil olmak zorundadır; değilse
+  otomatik repair task oluşur. (`lib/tier1.ps1`)
 - **verify (Tier 2)** — "doğru şey mi yapıldı?" **Şimdilik yok.** İhtiyaç
   netleşince eklenir.
 
@@ -66,7 +70,7 @@ sdd init                 projeye .sdd/ iskeletini kurar
 sdd spec   [-Prompt ...]  spec stage'i (-Prompt: düzeltip yeniden çalıştır)
 sdd plan   [-Prompt ...]  plan stage'i
 sdd tasks  [-Prompt ...]  tasks stage'i
-sdd analyze              tutarlılık denetimi (henüz taslak)
+sdd analyze              read-only tutarlılık analizi
 sdd implement            otonom implement loop (Tier 0 + Tier 1)
 sdd implement -ObserveEvery N   her N başarılı batch'te gözlem molası
 sdd implement -RevalidateFrom BASE -CandidateCommit COMMIT
@@ -79,6 +83,10 @@ sdd config               agent/model/effort seçim arayüzü (hafızalı)
 yeniden çalıştırır; `-Resume` varsa sağlayıcı oturumunu sürdürür. Implement loop
 idempotenttir: tekrar `sdd implement` çağrısı `done` task'ları atlar ve kaldığı
 ledger durumundan devam eder.
+
+Normal `sdd implement` girişi, completed/güncel bir analyze sonucu yoksa
+analyze'ı otomatik çalıştırır. Analyze git ile read-only doğrulanır ve
+`config.analyze.block_on` eşiğine ulaşan bulgu implementasyonu durdurur.
 
 Validator hatası düzeltilirken agent'ın ürettiği commit zaten doğruysa aynı
 işi ve token harcamasını tekrarlamak gerekmez. `-RevalidateFrom`, batch öncesi
@@ -124,12 +132,54 @@ girdi `{prompt, model, effort, resume_session, cwd, log_path, allowed_tools}`,
 çıktı `{ok, session_id, denied, stream}`. effort her sağlayıcıda farklı şeye
 çevrilir ama arayüz aynıdır.
 
+### Sağlayıcılar
+
+- **Codex:** `codex exec --json`; model ve reasoning effort doğrudan aktarılır,
+  retry aynı thread'i `exec resume` ile sürdürür.
+- **Claude Code:** `claude -p --output-format stream-json`; `--model`,
+  `--effort`, `--resume` ve `bypassPermissions` kullanılır.
+- **Cursor Agent:** `agent -p --output-format stream-json`; `--model`,
+  `--resume`, `--force`, `--sandbox disabled`, `--trust` ve `--workspace`
+  kullanılır. Cursor CLI ayrı effort bayrağı sunmadığından model adı korunur;
+  effort yalnızca ledger metadata'sı olarak kalır.
+
+Varsayılan yeni-proje routing'i:
+
+```
+spec/plan   -> Codex / gpt-5.6-sol
+tasks       -> Cursor / auto
+analyze     -> Claude / sonnet
+implement   -> Codex / gpt-5.6-sol
+```
+
+İlgili CLI'ların kurulu ve oturumlarının açık olması gerekir. İstenirse bütün
+stage'ler `.sdd/config.yaml` üzerinden tek sağlayıcıya alınabilir.
+
+## Testler
+
+Token harcamayan, mock CLI tabanlı tam takım:
+
+```powershell
+pwsh -NoProfile -File .\tests\run-all.ps1
+```
+
+Gerçek Codex `resume` yolunu iki küçük çağrıyla doğrulayan opt-in test:
+
+```powershell
+$env:SDD_RUN_LIVE_CODEX = "1"
+pwsh -NoProfile -File .\tests\live-codex-retry.ps1
+Remove-Item Env:SDD_RUN_LIVE_CODEX
+```
+
+GitHub Actions aynı mock takımı hem `windows-latest` hem `ubuntu-latest`
+üzerinde çalıştırır. Live test CI'da bilinçli olarak kapalıdır.
+
 ## İnşa durumu
 
-Çalışan parçalar: `init`, `status`, `sync-tasks`, `spec`, `plan`, `tasks`, Codex
-adapteri ve Tier 0 + Tier 1 implement loop. Loop için PowerShell parse, Tier 0,
-Tier 1, ledger render ve iki batch'lik uçtan uca fake-agent testleri `tests/`
-altındadır.
+Çalışan parçalar: `init`, `status`, `sync-tasks`, `spec`, `plan`, `tasks`,
+read-only `analyze`, Codex/Claude/Cursor adapterleri, Tier 0, probation + final
+strict Tier 1, retry/resume, revalidation ve implement loop. Windows/Linux CI
+ve uçtan uca fixture testleri `tests/` altındadır.
 
-Henüz taslak olan parçalar: `analyze`, interaktif `config` seçimi ve Claude /
-Cursor adapter bağlantıları. Tier 2 semantik doğrulama da kapsam dışıdır.
+Henüz taslak olan parça interaktif `config` seçimidir; routing YAML üzerinden
+tam çalışır. Tier 2 semantik doğrulama bu sürümün kapsamı dışındadır.

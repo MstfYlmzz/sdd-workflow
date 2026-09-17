@@ -47,7 +47,7 @@ try {
         version = 1; spec_id = '001-loop'
         stages = [pscustomobject]@{
             spec = [pscustomobject]@{status='completed'}; plan = [pscustomobject]@{status='completed'}
-            tasks = [pscustomobject]@{status='completed'}; analyze = [pscustomobject]@{status='completed'}
+            tasks = [pscustomobject]@{status='completed'}; analyze = [pscustomobject]@{status='completed';highest_severity='none';finding_count=0;summary='clean'}
             implement = [pscustomobject]@{status='not_started'}
         }
         gate_baseline = [pscustomobject]@{}

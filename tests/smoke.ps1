@@ -87,6 +87,13 @@ try {
     $probationResult = Invoke-Tier1 -Config ([pscustomobject]@{ gates = @($probationGate) }) -ProjectRoot $fixture -Ledger $probationLedger
     Assert-True $probationResult.ok 'Başlangıçta unavailable gate ilk yeşil geçişine kadar ertelenmeli.'
 
+    $missingGate = [pscustomobject]@{ name='missing-required'; cmd='sdd-command-that-does-not-exist'; required=$true }
+    $strictMissing = Invoke-Tier1 -Config ([pscustomobject]@{gates=@($missingGate)}) -ProjectRoot $fixture -Ledger ([pscustomobject]@{gate_baseline=[pscustomobject]@{}}) -Strict
+    Assert-True (-not $strictMissing.ok) 'Final strict kontrolde unavailable required gate fail olmalı.'
+    $missingGate.required = $false
+    $optionalMissing = Invoke-Tier1 -Config ([pscustomobject]@{gates=@($missingGate)}) -ProjectRoot $fixture -Ledger ([pscustomobject]@{gate_baseline=[pscustomobject]@{}}) -Strict
+    Assert-True $optionalMissing.ok 'Unavailable optional gate final strict kontrolü bloklamamalı.'
+
     $blankLog = Join-Path $fixture '.sdd/logs/blank-output.log'
     Write-SddLog -Message '' -LogPath $blankLog -Level 'stream'
     $blankCommand = if ($IsWindows) { 'echo.' } else { "printf '\n'" }
