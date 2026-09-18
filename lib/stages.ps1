@@ -139,6 +139,57 @@ function Set-SddStageProfile {
     return (Read-SddConfig -ConfigPath $ConfigPath)
 }
 
+function Update-SddConfigCompatibility {
+    <#
+      Yeni orkestratör alanlarını eski config.yaml dosyalarına yorumları ve
+      mevcut proje seçimlerini bozmadan ekler. Converge routing daha önce
+      seçilmişse döngü etkinleştirilir; seçilmemiş eski projelerde davranış
+      sessizce değiştirilmez.
+    #>
+    param([Parameter(Mandatory)] [string] $ConfigPath)
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "config.yaml bulunamadı: $ConfigPath" }
+    $text = Get-Content -LiteralPath $ConfigPath -Raw
+    $newline = if ($text -match "`r`n") { "`r`n" } else { "`n" }
+    $changes = [System.Collections.Generic.List[string]]::new()
+
+    function Add-MapValue {
+        param([string] $Section,[string] $Key,[string] $Value)
+        if ($script:compatText -match ("(?m)^\s{2}" + [regex]::Escape($Key) + "\s*:")) { return }
+        $match = [regex]::Match($script:compatText, ("(?ms)^" + [regex]::Escape($Section) + ":\s*(?:#.*)?\r?\n(?<body>(?:^[ \t]+[^\r\n]*(?:\r?\n|$))*)"))
+        $line = "  ${Key}: $Value"
+        if ($match.Success) {
+            $at = $match.Index + $match.Length
+            $prefix = if ($at -gt 0 -and $script:compatText[$at-1] -notin @("`r","`n")) { $script:compatNewline } else { '' }
+            $script:compatText = $script:compatText.Insert($at, $prefix + $line + $script:compatNewline)
+        } else {
+            if ($script:compatText.Length -gt 0 -and -not $script:compatText.EndsWith($script:compatNewline)) { $script:compatText += $script:compatNewline }
+            $script:compatText += $script:compatNewline + "${Section}:" + $script:compatNewline + $line + $script:compatNewline
+        }
+        $script:compatChanges.Add("$Section.$Key")
+    }
+
+    $script:compatText = $text
+    $script:compatNewline = $newline
+    $script:compatChanges = $changes
+    try {
+        $hasConvergeProfile = $text -match '(?m)^\s{2}converge\s*:'
+        Add-MapValue -Section loop -Key enable_converge -Value $(if ($hasConvergeProfile) { 'true' } else { 'false' })
+        Add-MapValue -Section loop -Key max_converge_rounds -Value '3'
+        Add-MapValue -Section ui -Key mode -Value 'auto'
+        Add-MapValue -Section ui -Key prompt_on_stage_start -Value 'false'
+        $next = $script:compatText
+    } finally {
+        Remove-Variable -Scope script -Name compatText,compatNewline,compatChanges -ErrorAction SilentlyContinue
+    }
+    if ($changes.Count -eq 0) { return [pscustomobject]@{ changed=$false; keys=@() } }
+    $tmp = "$ConfigPath.tmp"
+    Set-Content -LiteralPath $tmp -Value $next -Encoding utf8 -NoNewline
+    try { $null = Read-SddConfig -ConfigPath $tmp }
+    catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw "Config yükseltmesi doğrulanamadı: $($_.Exception.Message)" }
+    Move-Item -LiteralPath $tmp -Destination $ConfigPath -Force
+    [pscustomobject]@{ changed=$true; keys=@($changes) }
+}
+
 function Get-SddAgentCapabilities {
     param([Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent)
     $command = switch ($Agent) { 'cursor' { 'agent' }; default { $Agent } }

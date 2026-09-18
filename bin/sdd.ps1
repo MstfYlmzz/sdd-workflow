@@ -55,6 +55,8 @@ function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
     if($Command-eq'init'){$x=Initialize-SddProject -ProjectRoot (Get-Location).Path;Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
     $root=Find-ProjectRoot;$paths=Get-SddPaths $root
+    $upgrade=Update-SddConfigCompatibility -ConfigPath $paths.Config
+    if($upgrade.changed){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
     switch($Command){
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}

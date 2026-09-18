@@ -19,5 +19,16 @@ try{
   $menu=(Get-Command Select-SddMenuItem).ScriptBlock.ToString();Assert-True ($menu-match'\?1049h'-and$menu-notmatch'SetCursorPosition') 'Interaktif menü buffer koordinatı yerine alternate screen kullanmalı.'
   $legacy=[pscustomobject]@{agents=[pscustomobject]@{implement=[pscustomobject]@{agent='codex';model='old';effort='medium'}}}
   $fallback=Get-StageProfile -Config $legacy -StageName converge;Assert-True ($fallback.agent-eq'codex'-and$fallback.model-eq'gpt-5.6-sol') 'Eski configte eksik converge profili varsayılandan tamamlanmalı.'
+  $legacyPath=Join-Path $fixture 'legacy.yaml';@"
+agents:
+  implement: { agent: codex, model: old, effort: medium }
+  converge:  { agent: codex, model: gpt-5.6-terra, effort: high }
+loop:
+  batch_size: 3
+"@|Set-Content $legacyPath
+  $upgrade=Update-SddConfigCompatibility -ConfigPath $legacyPath;$legacyCfg=Read-SddConfig $legacyPath
+  Assert-True ($upgrade.changed-and$legacyCfg.loop.enable_converge-and$legacyCfg.loop.max_converge_rounds-eq3) 'Converge routingi olan eski config otomatik etkinleştirilmeli.'
+  Assert-True ($legacyCfg.ui.mode-eq'auto'-and-not$legacyCfg.ui.prompt_on_stage_start) 'Eksik UI varsayılanları eski confige eklenmeli.'
+  $again=Update-SddConfigCompatibility -ConfigPath $legacyPath;Assert-True (-not$again.changed) 'Config yükseltmesi idempotent olmalı.'
   Write-Host 'AGENT SELECTION INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}

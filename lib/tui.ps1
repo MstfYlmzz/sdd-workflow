@@ -200,4 +200,5 @@ function Show-SddDashboard {
         }
     } while ($key.KeyChar -notin @('q','Q'))
     Write-Host -NoNewline "$script:SddEsc[?25h$script:SddEsc[?1049l"
+    Write-Host 'SDD dashboard kapatıldı.' -ForegroundColor DarkGray
 }
