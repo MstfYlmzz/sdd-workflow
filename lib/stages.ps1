@@ -15,6 +15,14 @@
 Set-StrictMode -Version Latest
 
 $script:StageOrder = @('spec','plan','tasks','analyze','implement','converge')
+$script:DefaultStageProfiles = @{
+    spec      = [pscustomobject]@{agent='codex';model='gpt-5.6-sol';effort='high'}
+    plan      = [pscustomobject]@{agent='codex';model='gpt-5.6-sol';effort='high'}
+    tasks     = [pscustomobject]@{agent='cursor';model='auto';effort='medium'}
+    analyze   = [pscustomobject]@{agent='claude';model='sonnet';effort='medium'}
+    implement = [pscustomobject]@{agent='codex';model='gpt-5.6-sol';effort='medium'}
+    converge  = [pscustomobject]@{agent='codex';model='gpt-5.6-sol';effort='high'}
+}
 
 # Stage adı -> Spec Kit skill klasörü eşlemesi
 $script:StageSkill = @{
@@ -86,8 +94,13 @@ function Get-StageProfile {
         [Parameter(Mandatory)] [string] $StageName,
         [string] $Agent, [string] $Model, [string] $Effort
     )
-    $saved = $Config.agents.$StageName
-    if (-not $saved) { throw "config.agents.$StageName tanımlı değil." }
+    $saved=$null
+    if($Config-and$Config.PSObject.Properties.Name-contains'agents'-and$Config.agents){
+        if($Config.agents-is[Collections.IDictionary]-and$Config.agents.Contains($StageName)){$saved=$Config.agents[$StageName]}
+        elseif($Config.agents.PSObject.Properties.Name-contains$StageName){$saved=$Config.agents.$StageName}
+    }
+    if(-not$saved-and$script:DefaultStageProfiles.ContainsKey($StageName)){$saved=$script:DefaultStageProfiles[$StageName]}
+    if (-not $saved) { throw "config.agents.$StageName tanımlı değil ve varsayılan profil bulunamadı." }
     [pscustomobject]@{
         agent = $(if ($Agent) { $Agent } else { [string]$saved.agent })
         model = $(if ($Model) { $Model } else { [string]$saved.model })

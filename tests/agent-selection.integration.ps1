@@ -17,5 +17,7 @@ try{
   Assert-True (@('spec','plan','tasks','analyze','implement','converge'|Where-Object{$cfg.agents.$_.model-ne'test-model'}).Count-eq0) 'Bütün stage routingleri sırayla güncellenebilmeli.'
   $models=@(Get-SddAgentModels -Agent codex -CurrentModel 'saved-model');Assert-True ($models[0]-eq'saved-model'-and$models.Count-gt1) 'Model listesi kayıtlı model ve fallback seçenekleri içermeli.'
   $menu=(Get-Command Select-SddMenuItem).ScriptBlock.ToString();Assert-True ($menu-match'\?1049h'-and$menu-notmatch'SetCursorPosition') 'Interaktif menü buffer koordinatı yerine alternate screen kullanmalı.'
+  $legacy=[pscustomobject]@{agents=[pscustomobject]@{implement=[pscustomobject]@{agent='codex';model='old';effort='medium'}}}
+  $fallback=Get-StageProfile -Config $legacy -StageName converge;Assert-True ($fallback.agent-eq'codex'-and$fallback.model-eq'gpt-5.6-sol') 'Eski configte eksik converge profili varsayılandan tamamlanmalı.'
   Write-Host 'AGENT SELECTION INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}
