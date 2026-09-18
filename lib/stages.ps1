@@ -159,27 +159,33 @@ function Select-SddMenuItem {
         $number=0;if(-not[int]::TryParse($answer,[ref]$number)-or$number-lt1-or$number-gt$choices.Count){throw 'Geçersiz seçim.'}
         return $choices[$number-1].value
     }
-    Write-Host "`n$Title" -ForegroundColor Cyan;Write-Host '↑/↓ seç · Enter onayla · Esc iptal' -ForegroundColor DarkGray
-    $top=[Console]::CursorTop
+    $esc=[char]27
     try{
-        [Console]::CursorVisible=$false
+        Write-Host -NoNewline "$esc[?1049h$esc[?25l"
         while($true){
-            for($i=0;$i-lt$choices.Count;$i++){
-                [Console]::SetCursorPosition(0,$top+$i);$prefix=if($i-eq$index){'❯ '}else{'  '}
+            Write-Host -NoNewline "$esc[H$esc[2J"
+            Write-Host $Title -ForegroundColor Cyan
+            Write-Host '↑/↓ seç · Home/End · Enter onayla · Esc iptal' -ForegroundColor DarkGray
+            $height=try{[Math]::Max(3,[Console]::WindowHeight-4)}catch{15}
+            $start=[Math]::Min([Math]::Max(0,$index-$height+1),[Math]::Max(0,$choices.Count-$height))
+            $end=[Math]::Min($choices.Count,$start+$height)
+            for($i=$start;$i-lt$end;$i++){
+                $prefix=if($i-eq$index){'❯ '}else{'  '}
                 $text=$prefix+$choices[$i].label;$width=[Math]::Max(1,[Console]::WindowWidth-1)
                 if($text.Length-gt$width){$text=$text.Substring(0,$width)}
-                Write-Host -NoNewline $text.PadRight($width) -ForegroundColor $(if($i-eq$index){'Cyan'}else{'Gray'})
+                Write-Host $text -ForegroundColor $(if($i-eq$index){'Cyan'}else{'Gray'})
             }
+            if($choices.Count-gt$height){Write-Host "Gösterilen $($start+1)-$end / $($choices.Count)" -ForegroundColor DarkGray}
             $key=[Console]::ReadKey($true)
             switch($key.Key){
                 'UpArrow'{$index=($index-1+$choices.Count)%$choices.Count}
                 'DownArrow'{$index=($index+1)%$choices.Count}
                 'Home'{$index=0};'End'{$index=$choices.Count-1}
-                'Enter'{[Console]::SetCursorPosition(0,$top+$choices.Count);return $choices[$index].value}
-                'Escape'{[Console]::SetCursorPosition(0,$top+$choices.Count);throw 'Seçim iptal edildi.'}
+                'Enter'{return $choices[$index].value}
+                'Escape'{throw 'Seçim iptal edildi.'}
             }
         }
-    }finally{try{[Console]::CursorVisible=$true}catch{}}
+    }finally{Write-Host -NoNewline "$esc[?25h$esc[?1049l"}
 }
 
 function Get-SddAgentModels {
