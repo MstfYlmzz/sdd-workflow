@@ -84,7 +84,8 @@ sdd implement -ObserveEvery N   her N başarılı batch'te gözlem molası
 sdd implement -RevalidateFrom BASE -CandidateCommit COMMIT
                          başarısız validator sonrası mevcut commit'i agentsız doğrula
 sdd status               ledger özeti
-sdd config               agent/model/effort seçim arayüzü (hafızalı)
+sdd config               bütün stage'leri sırayla, ok tuşlarıyla ayarlar
+sdd config implement     yalnız implement stage'ini ok tuşlarıyla ayarlar
 sdd config implement     yalnız implement routing'ini değiştirir
 sdd config plan -RunOnly seçim yapar fakat config'e yazmaz
 sdd tui                  stages/tasks/routing/history/artifacts dashboard'u

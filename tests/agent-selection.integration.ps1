@@ -13,5 +13,8 @@ try{
   Assert-True ($profile.override-and$profile.agent-eq'cursor') 'Run-only override kayıtlı profili ezebilmeli.'
   Assert-True ((Get-Content $path|Where-Object{$_-match'^  implement:'})-match'claude') 'Runtime override configi değiştirmemeli.'
   Assert-True ($before-ne(Get-Content $path|Where-Object{$_-match'^  implement:'})) 'Kalıcı seçim hedef satırı değiştirmeli.'
+  foreach($stage in @('spec','plan','tasks','analyze','implement','converge')){$cfg=Set-SddStageProfile -ConfigPath $path -StageName $stage -Agent codex -Model test-model -Effort high}
+  Assert-True (@('spec','plan','tasks','analyze','implement','converge'|Where-Object{$cfg.agents.$_.model-ne'test-model'}).Count-eq0) 'Bütün stage routingleri sırayla güncellenebilmeli.'
+  $models=@(Get-SddAgentModels -Agent codex -CurrentModel 'saved-model');Assert-True ($models[0]-eq'saved-model'-and$models.Count-gt1) 'Model listesi kayıtlı model ve fallback seçenekleri içermeli.'
   Write-Host 'AGENT SELECTION INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}

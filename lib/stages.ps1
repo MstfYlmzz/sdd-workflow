@@ -138,18 +138,65 @@ function Get-SddAgentCapabilities {
     }
 }
 
+function Select-SddMenuItem {
+    <# Windows Terminal dahil gerçek bir ↑/↓ menüsü. String veya {label,value} nesnesi kabul eder. #>
+    param(
+        [Parameter(Mandatory)] [string] $Title,
+        [Parameter(Mandatory)] [object[]] $Items,
+        [string] $SelectedValue = ''
+    )
+    $choices=@($Items|ForEach-Object{
+        if($_-is[string]){[pscustomobject]@{label=[string]$_;value=[string]$_}}
+        else{[pscustomobject]@{label=[string]$_.label;value=[string]$_.value}}
+    })
+    if($choices.Count-eq0){throw "Menü boş: $Title"}
+    $index=0
+    for($i=0;$i-lt$choices.Count;$i++){if($choices[$i].value-eq$SelectedValue){$index=$i;break}}
+    $interactive=$false;try{$interactive=-not[Console]::IsInputRedirected-and-not[Console]::IsOutputRedirected}catch{}
+    if(-not$interactive){
+        Write-Host "`n$Title";for($i=0;$i-lt$choices.Count;$i++){Write-Host "  [$($i+1)] $($choices[$i].label)"}
+        $answer=Read-Host "Seçim [1-$($choices.Count)]"
+        $number=0;if(-not[int]::TryParse($answer,[ref]$number)-or$number-lt1-or$number-gt$choices.Count){throw 'Geçersiz seçim.'}
+        return $choices[$number-1].value
+    }
+    Write-Host "`n$Title" -ForegroundColor Cyan;Write-Host '↑/↓ seç · Enter onayla · Esc iptal' -ForegroundColor DarkGray
+    $top=[Console]::CursorTop
+    try{
+        [Console]::CursorVisible=$false
+        while($true){
+            for($i=0;$i-lt$choices.Count;$i++){
+                [Console]::SetCursorPosition(0,$top+$i);$prefix=if($i-eq$index){'❯ '}else{'  '}
+                $text=$prefix+$choices[$i].label;$width=[Math]::Max(1,[Console]::WindowWidth-1)
+                if($text.Length-gt$width){$text=$text.Substring(0,$width)}
+                Write-Host -NoNewline $text.PadRight($width) -ForegroundColor $(if($i-eq$index){'Cyan'}else{'Gray'})
+            }
+            $key=[Console]::ReadKey($true)
+            switch($key.Key){
+                'UpArrow'{$index=($index-1+$choices.Count)%$choices.Count}
+                'DownArrow'{$index=($index+1)%$choices.Count}
+                'Home'{$index=0};'End'{$index=$choices.Count-1}
+                'Enter'{[Console]::SetCursorPosition(0,$top+$choices.Count);return $choices[$index].value}
+                'Escape'{[Console]::SetCursorPosition(0,$top+$choices.Count);throw 'Seçim iptal edildi.'}
+            }
+        }
+    }finally{try{[Console]::CursorVisible=$true}catch{}}
+}
+
 function Get-SddAgentModels {
-    param([Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent)
-    if ($Agent -eq 'claude') { return @('sonnet','opus','haiku') }
-    if ($Agent -eq 'codex') { return @('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna') }
-    $cap = Get-SddAgentCapabilities -Agent cursor
-    if (-not $cap.available) { return @('auto') }
-    try {
-        $output = @(& $cap.command --list-models 2>$null)
-        $models = @($output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -and $_ -notmatch '^Available models' })
-        if ($models.Count) { return @('auto') + $models }
-    } catch { }
-    return @('auto')
+    param([Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent,[string]$CurrentModel='')
+    $fallback=switch($Agent){'claude'{@('sonnet','opus','haiku')};'codex'{@('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna')};default{@('auto')}}
+    $cap=Get-SddAgentCapabilities -Agent $Agent;$discovered=@()
+    if($cap.available){
+        try{
+            if($Agent-eq'cursor'){$output=@(& $cap.command --list-models 2>$null);if($LASTEXITCODE-eq0){$discovered=$output}}
+            else{
+                $help=@(& $cap.command --help 2>$null)
+                if(($help-join"`n")-match'(?mi)^\s+models?\s'){$output=@(& $cap.command models 2>$null);if($LASTEXITCODE-eq0){$discovered=$output}}
+            }
+        }catch{}
+    }
+    $parsed=@($discovered|ForEach-Object{([string]$_).Trim()-replace'^[>*\-\s]+',''}|ForEach-Object{($_-split'\s+')[0]}|Where-Object{$_-match'^[A-Za-z0-9][A-Za-z0-9._:/-]+$'-and$_-notmatch'(?i)^available$'})
+    return @(@($CurrentModel)+@($fallback)+@($parsed)|Where-Object{$_}|Select-Object -Unique)
 }
 
 function Show-AgentSelection {
@@ -161,35 +208,35 @@ function Show-AgentSelection {
     param(
         [Parameter(Mandatory)] [object] $Config,
         [Parameter(Mandatory)] [string] $ConfigPath,
-        [ValidateSet('spec','plan','tasks','analyze','implement','converge')] [string] $StageName,
+        [ValidateSet('all','spec','plan','tasks','analyze','implement','converge')] [string] $StageName,
         [switch] $RunOnly
     )
     if (-not $StageName) {
-        Write-Host ''
-        foreach ($name in $script:StageOrder) {
-            $p = $Config.agents.$name
-            if ($p) { Write-Host ('  {0,-10} {1}/{2}/{3}' -f $name,$p.agent,$p.model,$p.effort) }
+        $StageName='all'
+    }
+    if($StageName-eq'all'){
+        $profiles=[ordered]@{}
+        foreach($name in $script:StageOrder){
+            $Config=Read-SddConfig -ConfigPath $ConfigPath
+            $profiles[$name]=Show-AgentSelection -Config $Config -ConfigPath $ConfigPath -StageName $name -RunOnly:$RunOnly
         }
-        $StageName = Read-Host 'Stage'
-        if ($StageName -notin $script:StageOrder) { throw "Geçersiz stage: $StageName" }
+        return [pscustomobject]$profiles
     }
     $saved = Get-StageProfile -Config $Config -StageName $StageName
     Write-Host "`n[$StageName] kayıtlı: $($saved.agent)/$($saved.model)/$($saved.effort)"
+    $agentItems=@()
     foreach ($provider in @('codex','claude','cursor')) {
         $cap = Get-SddAgentCapabilities -Agent $provider
         $mark = if ($cap.available) { 'hazır' } else { 'kurulu değil' }
-        Write-Host ('  {0,-7} {1}' -f $provider,$mark) -ForegroundColor $(if ($cap.available) { 'Gray' } else { 'DarkYellow' })
+        $agentItems+=[pscustomobject]@{label=('{0,-7} [{1}]'-f$provider,$mark);value=$provider}
     }
-    $agent = Read-Host "Agent (codex|claude|cursor) [$($saved.agent)]"
-    if (-not $agent) { $agent = $saved.agent }
-    if ($agent -notin @('codex','claude','cursor')) { throw "Geçersiz agent: $agent" }
-    $suggested = @(Get-SddAgentModels -Agent $agent)
-    if ($suggested.Count) { Write-Host "Modeller: $($suggested -join ', ')" -ForegroundColor DarkGray }
-    $model = Read-Host "Model [$($saved.model)]"
-    if (-not $model) { $model = $saved.model }
-    $effort = Read-Host "Effort (low|medium|high|xhigh|max) [$($saved.effort)]"
-    if (-not $effort) { $effort = $saved.effort }
-    if ($effort -notin @('low','medium','high','xhigh','max')) { throw "Geçersiz effort: $effort" }
+    $agent=Select-SddMenuItem -Title "[$StageName] Agent" -Items $agentItems -SelectedValue $saved.agent
+    $models=@(Get-SddAgentModels -Agent $agent -CurrentModel $(if($agent-eq$saved.agent){$saved.model}else{''}))
+    $modelItems=@($models|ForEach-Object{[pscustomobject]@{label=$_;value=$_}})+@([pscustomobject]@{label='Özel model adı…';value='__custom__'})
+    $model=Select-SddMenuItem -Title "[$StageName] Model ($agent)" -Items $modelItems -SelectedValue $(if($agent-eq$saved.agent){$saved.model}else{$models[0]})
+    if($model-eq'__custom__'){$model=Read-Host 'Model adı';if([string]::IsNullOrWhiteSpace($model)){throw 'Model adı boş olamaz.'}}
+    $efforts=if($agent-eq'cursor'){@([pscustomobject]@{label='medium (Cursor CLI effort bayrağı sunmuyor; metadata)';value='medium'})}else{@('low','medium','high','xhigh','max')|ForEach-Object{[pscustomobject]@{label=$_;value=$_}}}
+    $effort=Select-SddMenuItem -Title "[$StageName] Effort" -Items $efforts -SelectedValue $(if($agent-eq$saved.agent){$saved.effort}else{'medium'})
     $profile = [pscustomobject]@{agent=$agent;model=$model;effort=$effort;override=[bool]$RunOnly}
     if (-not $RunOnly) {
         $Config = Set-SddStageProfile -ConfigPath $ConfigPath -StageName $StageName -Agent $agent -Model $model -Effort $effort

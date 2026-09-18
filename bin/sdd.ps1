@@ -18,7 +18,8 @@ function Show-Help {
     Write-Host '  sdd spec|plan|tasks|analyze [-Agent A] [-Model M] [-Effort E] [-Ui auto|plain|tui|raw]'
     Write-Host '  sdd implement [-ObserveEvery N] [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd converge [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
-    Write-Host "  sdd config [stage] [-RunOnly]`n"
+    Write-Host '  sdd config               tüm stage routinglerini sırayla ayarlar'
+    Write-Host "  sdd config <stage>       yalnız verilen stage'i ayarlar`n"
 }
 function Get-CommonArguments {
     param([string[]]$Arguments)
@@ -57,7 +58,7 @@ function Invoke-Sdd {
     switch($Command){
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}
-      'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage=if($o.remaining.Count){$o.remaining[0]}else{''};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
+      'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage=if($o.remaining.Count){$o.remaining[0]}else{'all'};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
       {$_-in@('spec','plan','tasks')}{
         $o=Get-CommonArguments $Rest;$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$profile=Get-CommandProfile $cfg $Command $o $paths.Config
