@@ -58,7 +58,7 @@ function Invoke-Sdd {
     switch($Command){
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}
-      'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage=if($o.remaining.Count){$o.remaining[0]}else{'all'};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
+      'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage='all';if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
       {$_-in@('spec','plan','tasks')}{
         $o=Get-CommonArguments $Rest;$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$profile=Get-CommandProfile $cfg $Command $o $paths.Config

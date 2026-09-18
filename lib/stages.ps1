@@ -208,12 +208,11 @@ function Show-AgentSelection {
     param(
         [Parameter(Mandatory)] [object] $Config,
         [Parameter(Mandatory)] [string] $ConfigPath,
-        [ValidateSet('all','spec','plan','tasks','analyze','implement','converge')] [string] $StageName,
+        [AllowEmptyString()] [string] $StageName,
         [switch] $RunOnly
     )
-    if (-not $StageName) {
-        $StageName='all'
-    }
+    if ([string]::IsNullOrWhiteSpace($StageName)) { $StageName='all' }
+    if($StageName-notin(@('all')+$script:StageOrder)){throw "Geçersiz stage: $StageName. Beklenen: all, $($script:StageOrder -join ', ')"}
     if($StageName-eq'all'){
         $profiles=[ordered]@{}
         foreach($name in $script:StageOrder){
