@@ -17,5 +17,9 @@ try{
   $ledger=[pscustomobject]@{spec_id='fixture';stages=[pscustomobject]@{spec=[pscustomobject]@{status='completed'};plan=[pscustomobject]@{status='completed'};tasks=[pscustomobject]@{status='completed'};analyze=[pscustomobject]@{status='completed'};implement=[pscustomobject]@{status='running'};converge=[pscustomobject]@{status='not_started';round=0}};tasks=@([pscustomobject]@{id='T001';status='pending';title='A task'})}
   $cfg=[pscustomobject]@{agents=[pscustomobject]@{spec=[pscustomobject]@{agent='codex';model='m';effort='high'}}}
   foreach($page in @('overview','tasks','history','artifacts')){$lines=@(Get-SddDashboardLines -Ledger $ledger -Config $cfg -History $history -Page $page -ProjectRoot $fixture -Width 40);Assert-True ($lines.Count-gt2) "$page sayfası render edilmeli."}
+  $wrapped=@(ConvertTo-SddWrappedLines -Text ('word '*30) -Width 20);Assert-True ($wrapped.Count-gt1-and@($wrapped|Where-Object{$_.Length-gt20}).Count-eq0) 'Uzun TUI metni panel genişliğinde sarılmalı.'
+  $context=[ordered]@{stage='implement';run_id='1234567890';events=[Collections.Generic.List[object]]::new();tui_scroll=@{ai=0;ops=0;flow=0};tui_active_pane='ai'}
+  $context.events.Add([pscustomobject]@{category='assistant';message=('message '*40);status='';command='';event_type='agent_message'})
+  $live=@(Get-SddLiveTuiLines -Context $context -Width 50 -Height 20);Assert-True ($live.Count-eq20-and@($live|Where-Object{$_.Length-gt50}).Count-eq0) 'Live TUI ölçüleri terminale sığmalı.'
   Write-Host 'EVENTS TUI INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}

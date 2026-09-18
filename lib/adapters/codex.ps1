@@ -138,6 +138,14 @@ function Read-CodexEvent {
             }
         }
         'turn.started' { }
+        'item.started' {
+            if ($evt.item -and $evt.item.type -eq 'command_execution') {
+                $cmd = if ($evt.item.PSObject.Properties.Name -contains 'command') { [string]$evt.item.command } else { '' }
+                if ($cmd) { Send-SddEvent -Command $cmd -LogPath $LogPath -Category 'command' -EventType 'command_started' -Source 'provider' -Provider 'codex' -Status 'running' }
+            } elseif ($evt.item -and $evt.item.type -in @('mcp_tool_call','web_search')) {
+                Send-SddEvent -Message ([string]$evt.item.type) -LogPath $LogPath -Category 'tool' -EventType ([string]$evt.item.type) -Source 'provider' -Provider 'codex' -Status 'running'
+            }
+        }
         'item.completed' {
             if ($evt.item -and $evt.item.type -eq 'agent_message' -and $evt.item.PSObject.Properties.Name -contains 'text') {
                 $MessageParts.Add([string]$evt.item.text)

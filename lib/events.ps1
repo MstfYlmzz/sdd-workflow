@@ -51,6 +51,8 @@ function Initialize-SddEventContext {
         events = [System.Collections.Generic.List[object]]::new()
         warnings = [System.Collections.Generic.List[string]]::new()
         tui_active = $false
+        tui_active_pane = 'ai'
+        tui_scroll = @{ai=0;ops=0;flow=0}
     }
     $script:SddEventSinkEnabled = $true
     if ($script:SddEventContext.ui_mode -eq 'tui' -and (Get-Command Start-SddLiveTui -ErrorAction SilentlyContinue)) {
