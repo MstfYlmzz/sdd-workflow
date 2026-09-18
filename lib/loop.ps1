@@ -273,7 +273,8 @@ function Invoke-ImplementLoop {
         [Parameter(Mandatory)] [string] $ProjectRoot,
         [int] $ObserveEvery = -1,
         [string] $RevalidateFrom,
-        [string] $CandidateCommit
+        [string] $CandidateCommit,
+        [object] $ProfileOverride
     )
 
     if ($RevalidateFrom -and -not $CandidateCommit) {
@@ -300,7 +301,7 @@ function Invoke-ImplementLoop {
     $circuitLimit = [Math]::Max(1, [int](Get-WorkflowProperty -Object $loopCfg -Name 'circuit_breaker' -Default 3))
     if ($ObserveEvery -lt 0) { $ObserveEvery = [int](Get-WorkflowProperty -Object $loopCfg -Name 'observe_every' -Default 0) }
 
-    $baseProfile = $Config.agents.implement
+    $baseProfile = if ($ProfileOverride) { $ProfileOverride } else { $Config.agents.implement }
     if (-not $baseProfile) { throw 'config.agents.implement tanımlı değil.' }
     $agentFn = Resolve-Adapter -AgentName ([string](Get-WorkflowProperty -Object $baseProfile -Name 'agent'))
     $logPath = Join-Path $paths.LogsDir 'implement.log'
@@ -365,6 +366,23 @@ function Invoke-ImplementLoop {
                 $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message "sdd: add final gate repair $($repair.id)"
                 Write-SddLog -Message "[implement] final gate için repair task eklendi: $($repair.id)" -LogPath $logPath -Level 'warn'
                 continue
+            }
+
+            $enableConverge = [bool](Get-WorkflowProperty -Object $loopCfg -Name 'enable_converge' -Default $false)
+            if ($enableConverge) {
+                Write-SddLog -Message '[implement] final gate geçti; converge başlıyor' -LogPath $logPath -Level 'info'
+                $converge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot
+                if (-not $converge.ok) {
+                    Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason $converge.outcome -Profile $baseProfile
+                    Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $converge.output
+                    $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message 'sdd: stop on converge failure' -StateOnly
+                    return [pscustomobject]@{ok=$false;reason=$converge.outcome;output=$converge.output;batches=$attemptedBatches}
+                }
+                if ($converge.outcome -eq 'tasks_appended') {
+                    Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'convergence_tasks' -Profile $baseProfile
+                    Write-SddLog -Message "[implement] converge $($converge.tasks_appended) yeni task ekledi; loop devam ediyor" -LogPath $logPath -Level 'warn'
+                    continue
+                }
             }
             Set-ImplementStageState -Ledger $Ledger -Status 'completed' -Reason 'all_done' -Profile $baseProfile
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0
@@ -443,6 +461,7 @@ function Invoke-ImplementLoop {
         $request = @{
             prompt = $prompt; model = $profile.model; effort = $profile.effort
             cwd = $ProjectRoot; log_path = $logPath
+            stream_partial = (Test-SddPartialStreaming)
         }
         if ($resumeSession) { $request.resume_session = $resumeSession }
         $agentResult = & $agentFn -Request $request

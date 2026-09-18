@@ -72,6 +72,7 @@ function Invoke-CodexAgent {
         denied       = [System.Collections.Generic.List[string]]::new()
         last_message = $null
         log_path     = $Request.log_path
+        usage        = $null
     }
     $script:__sawTurn = $false
     $cliExitCode = 0
@@ -125,7 +126,7 @@ function Read-CodexEvent {
 
     if ($null -eq $evt) {
         # JSON değil (ör. stderr uyarısı) — ham akıt + logla
-        Write-SddLog -Message $Line -LogPath $LogPath -Level 'stream'
+        Send-SddEvent -Message $Line -LogPath $LogPath -Level 'stream' -Category 'command_output' -EventType 'provider_raw' -Source 'provider' -Provider 'codex'
         return
     }
 
@@ -133,32 +134,43 @@ function Read-CodexEvent {
         'thread.started' {
             if ($evt.PSObject.Properties.Name -contains 'thread_id') {
                 $Result.session_id = $evt.thread_id
-                Write-SddLog -Message "session: $($evt.thread_id)" -LogPath $LogPath -Level 'info'
+                Send-SddEvent -Message 'Codex session başladı' -LogPath $LogPath -Category 'workflow' -EventType 'session_started' -Source 'provider' -Provider 'codex' -Metadata @{resume_available=$true}
             }
         }
         'turn.started' { }
         'item.completed' {
             if ($evt.item -and $evt.item.type -eq 'agent_message' -and $evt.item.PSObject.Properties.Name -contains 'text') {
                 $MessageParts.Add([string]$evt.item.text)
-                Write-SddLog -Message $evt.item.text -LogPath $LogPath -Level 'stream'
+                Send-SddEvent -Message $evt.item.text -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'codex'
             }
             elseif ($evt.item -and $evt.item.type -eq 'command_execution') {
                 # çalıştırılan komutları da akıt (görünürlük için)
                 $cmd = if ($evt.item.PSObject.Properties.Name -contains 'command') { $evt.item.command } else { '' }
-                if ($cmd) { Write-SddLog -Message "$ $cmd" -LogPath $LogPath -Level 'stream' }
+                if ($cmd) { Send-SddEvent -Command $cmd -LogPath $LogPath -Category 'command' -EventType 'command_completed' -Source 'provider' -Provider 'codex' -Status ([string]$evt.item.status) }
+            }
+            elseif ($evt.item -and $evt.item.type -eq 'reasoning') {
+                $summary = if ($evt.item.PSObject.Properties.Name -contains 'text') { [string]$evt.item.text } elseif ($evt.item.PSObject.Properties.Name -contains 'summary') { [string]$evt.item.summary } else { 'Reasoning adımı tamamlandı' }
+                Send-SddEvent -Message $summary -LogPath $LogPath -Category 'reasoning_summary' -EventType 'reasoning' -Source 'provider' -Provider 'codex'
+            }
+            elseif ($evt.item -and $evt.item.type -in @('file_change','mcp_tool_call','web_search','plan_update')) {
+                Send-SddEvent -Message ([string]$evt.item.type) -LogPath $LogPath -Category 'tool' -EventType ([string]$evt.item.type) -Source 'provider' -Provider 'codex' -Status ([string]$evt.item.status)
             }
         }
         'turn.completed' {
+            if ($evt.PSObject.Properties.Name -contains 'usage') {
+                $Result.usage = $evt.usage
+                Send-SddEvent -Message 'Codex usage alındı' -LogPath $LogPath -Category 'usage' -EventType 'usage' -Source 'provider' -Provider 'codex' -Usage $evt.usage
+            }
             if ($OnTurnCompleted) { & $OnTurnCompleted }
         }
         'error' {
             $msg = if ($evt.PSObject.Properties.Name -contains 'message') { $evt.message } else { 'bilinmeyen hata' }
             $Result.denied.Add([string]$msg)
-            Write-SddLog -Message "HATA: $msg" -LogPath $LogPath -Level 'error'
+            Send-SddEvent -Message $msg -LogPath $LogPath -Level 'error' -Category 'error' -EventType 'provider_error' -Source 'provider' -Provider 'codex'
         }
         default {
             # tanınmayan olay tipleri: sessizce logla (akıtma)
-            if ($LogPath) { Write-SddLog -Message $Line -LogPath $LogPath -Level 'stream' }
+            if ($LogPath) { Send-SddEvent -Message $Line -LogPath $LogPath -Level 'stream' -Category 'tool' -EventType ([string]$evt.type) -Source 'provider' -Provider 'codex' }
         }
     }
 }

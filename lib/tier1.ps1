@@ -86,30 +86,33 @@ function Invoke-GateCommand {
     $name = [string](Get-GateProperty -Gate $Gate -Name 'name')
     $command = [string](Get-GateProperty -Gate $Gate -Name 'cmd')
     $output = [System.Collections.Generic.List[string]]::new()
-    Write-SddLog -Message "[Tier 1/$name] $command" -LogPath $LogPath -Level 'info'
+    Send-SddEvent -Message "Tier 1/$name" -Command $command -LogPath $LogPath -Category 'command' -EventType 'gate_command_started' -Source 'gate' -Stage 'implement' -Status 'running'
+    $started = Get-Date
 
     Push-Location $ProjectRoot
     try {
         if ($IsWindows) {
             & cmd.exe /d /s /c $command 2>&1 | ForEach-Object {
                 $line = [string]$_; $output.Add($line)
-                Write-SddLog -Message $line -LogPath $LogPath -Level 'stream'
+                Send-SddEvent -Message $line -LogPath $LogPath -Level 'stream' -Category 'command_output' -EventType 'gate_output' -Source 'gate' -Stage 'implement'
             }
         } else {
             & /bin/sh -lc $command 2>&1 | ForEach-Object {
                 $line = [string]$_; $output.Add($line)
-                Write-SddLog -Message $line -LogPath $LogPath -Level 'stream'
+                Send-SddEvent -Message $line -LogPath $LogPath -Level 'stream' -Category 'command_output' -EventType 'gate_output' -Source 'gate' -Stage 'implement'
             }
         }
         $exitCode = $LASTEXITCODE
     } catch {
         $exitCode = 1
         $output.Add($_.Exception.Message)
-        Write-SddLog -Message $_.Exception.Message -LogPath $LogPath -Level 'error'
+        Send-SddEvent -Message $_.Exception.Message -LogPath $LogPath -Level 'error' -Category 'error' -EventType 'gate_error' -Source 'gate' -Stage 'implement'
     } finally {
         Pop-Location
     }
 
+    $duration = [long]((Get-Date) - $started).TotalMilliseconds
+    Send-SddEvent -Message "Tier 1/$name" -Command $command -LogPath $LogPath -Category 'gate' -EventType 'gate_completed' -Source 'gate' -Stage 'implement' -Status $(if ($exitCode -eq 0) {'passed'} else {'failed'}) -ExitCode $exitCode -DurationMs $duration
     [pscustomobject]@{
         ok        = ($exitCode -eq 0)
         exit_code = $exitCode

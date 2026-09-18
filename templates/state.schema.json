@@ -27,7 +27,8 @@
         "plan":      { "$ref": "#/$defs/stage" },
         "tasks":     { "$ref": "#/$defs/stage" },
         "analyze":   { "$ref": "#/$defs/stage" },
-        "implement": { "$ref": "#/$defs/stage" }
+        "implement": { "$ref": "#/$defs/stage" },
+        "converge":  { "$ref": "#/$defs/stage" }
       },
       "additionalProperties": { "$ref": "#/$defs/stage" }
     },
@@ -71,7 +72,8 @@
         "consecutive_failures": { "type": "integer", "minimum": 0, "description": "Circuit breaker için ardışık başarısız batch sayısı." },
         "highest_severity": { "type": "string", "enum": ["none", "info", "warning", "critical"], "description": "Analyze aşamasındaki en ağır bulgu." },
         "finding_count": { "type": "integer", "minimum": 0 },
-        "summary": { "type": ["string", "null"] }
+        "summary": { "type": ["string", "null"] },
+        "round": { "type": "integer", "minimum": 0, "description": "Tamamlanan/başlatılan convergence turu." }
       }
     },
     "task": {
@@ -116,6 +118,11 @@
         "strict_gates": {
           "type": "boolean",
           "description": "True ise bu task normal probation istisnalarını kullanmadan bütün Tier 1 gate'lerini geçmelidir. Final gate repair tasklarında kullanılır."
+        },
+        "convergence_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Task converge tarafından eklendiyse kaynak convergence turu."
         },
         "updated_at": { "type": ["string", "null"], "format": "date-time" }
       }

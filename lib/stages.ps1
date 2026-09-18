@@ -3,7 +3,7 @@
   agent/model/effort seçim arayüzünü yönetir.
 
   Stage sırası (stale mantığı buna dayanır):
-    spec -> plan -> tasks -> analyze -> implement
+    spec -> plan -> tasks -> analyze -> implement -> converge
 
   Spec Kit entegrasyonu (Yol A): orkestratör ilgili SKILL.md'yi okur,
   $ARGUMENTS'ı kullanıcı açıklamasıyla değiştirir, non-interactive kısıtını
@@ -14,7 +14,7 @@
 
 Set-StrictMode -Version Latest
 
-$script:StageOrder = @('spec','plan','tasks','analyze','implement')
+$script:StageOrder = @('spec','plan','tasks','analyze','implement','converge')
 
 # Stage adı -> Spec Kit skill klasörü eşlemesi
 $script:StageSkill = @{
@@ -22,6 +22,7 @@ $script:StageSkill = @{
     plan    = 'speckit-plan'
     tasks   = 'speckit-tasks'
     analyze = 'speckit-analyze'
+    converge = 'speckit-converge'
 }
 
 # codex exec non-interactive olduğu için skill'in soru sormasını engelleyen
@@ -33,6 +34,7 @@ $script:StageScope = @{
     plan    = @{ produces = 'plan.md ve tasarım artefaktları (research.md, data-model.md, contracts/, quickstart.md)'; forbid = 'tasks.md' }
     tasks   = @{ produces = 'tasks.md';  forbid = 'kod implementasyonu ya da herhangi bir kaynak dosya' }
     analyze = @{ produces = 'analiz raporu';  forbid = 'spec.md, plan.md, tasks.md üzerinde herhangi bir değişiklik' }
+    converge = @{ produces = 'yalnızca gerekliyse tasks.md sonuna append-only Convergence fazı'; forbid = 'uygulama kodu, spec.md, plan.md veya mevcut task satırlarında herhangi bir değişiklik' }
 }
 
 function Get-NonInteractivePreamble {
@@ -78,14 +80,122 @@ raporla ve DUR.
 "@
 }
 
+function Get-StageProfile {
+    param(
+        [Parameter(Mandatory)] [object] $Config,
+        [Parameter(Mandatory)] [string] $StageName,
+        [string] $Agent, [string] $Model, [string] $Effort
+    )
+    $saved = $Config.agents.$StageName
+    if (-not $saved) { throw "config.agents.$StageName tanımlı değil." }
+    [pscustomobject]@{
+        agent = $(if ($Agent) { $Agent } else { [string]$saved.agent })
+        model = $(if ($Model) { $Model } else { [string]$saved.model })
+        effort = $(if ($Effort) { $Effort } else { [string]$saved.effort })
+        override = [bool]($Agent -or $Model -or $Effort)
+    }
+}
+
+function Set-SddStageProfile {
+    <# config.yaml yorumlarını koruyarak tek stage'in inline routing satırını atomik günceller. #>
+    param(
+        [Parameter(Mandatory)] [string] $ConfigPath,
+        [Parameter(Mandatory)] [ValidateSet('spec','plan','tasks','analyze','implement','converge')] [string] $StageName,
+        [Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent,
+        [Parameter(Mandatory)] [string] $Model,
+        [Parameter(Mandatory)] [string] $Effort
+    )
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "config.yaml bulunamadı: $ConfigPath" }
+    $text = Get-Content -LiteralPath $ConfigPath -Raw
+    $line = "  ${StageName}:".PadRight(13) + "{ agent: $Agent, model: $Model, effort: $Effort }"
+    $pattern = "(?m)^\s{2}" + [regex]::Escape($StageName) + ":\s*\{[^\r\n]*\}\s*$"
+    if ([regex]::IsMatch($text, $pattern)) {
+        $next = [regex]::Replace($text, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $line }, 1)
+    } else {
+        $agentsMatch = [regex]::Match($text, '(?ms)^agents:\s*\r?\n(?<body>(?:^\s{2}[^\r\n]*\r?\n)+)')
+        if (-not $agentsMatch.Success) { throw 'config.yaml agents bloğu bulunamadı.' }
+        $body = $agentsMatch.Groups['body'].Value
+        $replacement = 'agents:' + [Environment]::NewLine + $body.TrimEnd("`r","`n") + [Environment]::NewLine + $line + [Environment]::NewLine
+        $next = $text.Substring(0,$agentsMatch.Index) + $replacement + $text.Substring($agentsMatch.Index + $agentsMatch.Length)
+    }
+    $tmp = "$ConfigPath.tmp"
+    Set-Content -LiteralPath $tmp -Value $next -Encoding utf8 -NoNewline
+    try { $null = Read-SddConfig -ConfigPath $tmp }
+    catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw "Yeni config doğrulanamadı: $($_.Exception.Message)" }
+    Move-Item -LiteralPath $tmp -Destination $ConfigPath -Force
+    return (Read-SddConfig -ConfigPath $ConfigPath)
+}
+
+function Get-SddAgentCapabilities {
+    param([Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent)
+    $command = switch ($Agent) { 'cursor' { 'agent' }; default { $Agent } }
+    $found = Get-Command $command -ErrorAction SilentlyContinue
+    [pscustomobject]@{
+        agent = $Agent; command = $command; available = [bool]$found
+        supports_effort = ($Agent -ne 'cursor')
+        supports_resume = $true
+        supports_model_list = ($Agent -eq 'cursor')
+    }
+}
+
+function Get-SddAgentModels {
+    param([Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent)
+    if ($Agent -eq 'claude') { return @('sonnet','opus','haiku') }
+    if ($Agent -eq 'codex') { return @('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna') }
+    $cap = Get-SddAgentCapabilities -Agent cursor
+    if (-not $cap.available) { return @('auto') }
+    try {
+        $output = @(& $cap.command --list-models 2>$null)
+        $models = @($output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -and $_ -notmatch '^Available models' })
+        if ($models.Count) { return @('auto') + $models }
+    } catch { }
+    return @('auto')
+}
+
 function Show-AgentSelection {
     <#
       Akış başında kayıtlı seçimleri gösterir, Enter ile devam / d ile değiştir /
       r ile sıfırla. Değişiklik config.yaml'a geri yazılır (hafıza). Menü
-      sağlayıcıya göre uyarlanır. (Bu tur: iskelet — bir sonraki turda tam UI.)
+      sağlayıcıya göre uyarlanır.
     #>
-    param([object] $Config, [string] $ConfigPath)
-    throw [System.NotImplementedException]::new('Show-AgentSelection (sonraki tur)')
+    param(
+        [Parameter(Mandatory)] [object] $Config,
+        [Parameter(Mandatory)] [string] $ConfigPath,
+        [ValidateSet('spec','plan','tasks','analyze','implement','converge')] [string] $StageName,
+        [switch] $RunOnly
+    )
+    if (-not $StageName) {
+        Write-Host ''
+        foreach ($name in $script:StageOrder) {
+            $p = $Config.agents.$name
+            if ($p) { Write-Host ('  {0,-10} {1}/{2}/{3}' -f $name,$p.agent,$p.model,$p.effort) }
+        }
+        $StageName = Read-Host 'Stage'
+        if ($StageName -notin $script:StageOrder) { throw "Geçersiz stage: $StageName" }
+    }
+    $saved = Get-StageProfile -Config $Config -StageName $StageName
+    Write-Host "`n[$StageName] kayıtlı: $($saved.agent)/$($saved.model)/$($saved.effort)"
+    foreach ($provider in @('codex','claude','cursor')) {
+        $cap = Get-SddAgentCapabilities -Agent $provider
+        $mark = if ($cap.available) { 'hazır' } else { 'kurulu değil' }
+        Write-Host ('  {0,-7} {1}' -f $provider,$mark) -ForegroundColor $(if ($cap.available) { 'Gray' } else { 'DarkYellow' })
+    }
+    $agent = Read-Host "Agent (codex|claude|cursor) [$($saved.agent)]"
+    if (-not $agent) { $agent = $saved.agent }
+    if ($agent -notin @('codex','claude','cursor')) { throw "Geçersiz agent: $agent" }
+    $suggested = @(Get-SddAgentModels -Agent $agent)
+    if ($suggested.Count) { Write-Host "Modeller: $($suggested -join ', ')" -ForegroundColor DarkGray }
+    $model = Read-Host "Model [$($saved.model)]"
+    if (-not $model) { $model = $saved.model }
+    $effort = Read-Host "Effort (low|medium|high|xhigh|max) [$($saved.effort)]"
+    if (-not $effort) { $effort = $saved.effort }
+    if ($effort -notin @('low','medium','high','xhigh','max')) { throw "Geçersiz effort: $effort" }
+    $profile = [pscustomobject]@{agent=$agent;model=$model;effort=$effort;override=[bool]$RunOnly}
+    if (-not $RunOnly) {
+        $Config = Set-SddStageProfile -ConfigPath $ConfigPath -StageName $StageName -Agent $agent -Model $model -Effort $effort
+        Write-Host "Kaydedildi: $StageName -> $agent/$model/$effort" -ForegroundColor Green
+    } else { Write-Host "Yalnız bu çalışma: $agent/$model/$effort" -ForegroundColor Yellow }
+    return $profile
 }
 
 function Get-StagePrompt {
@@ -123,6 +233,16 @@ Normal analiz raporundan sonra EN SON SATIRDA tam olarak şu biçimde kompakt JS
 SDD_ANALYZE_RESULT {"highest_severity":"none|info|warning|critical","finding_count":0,"summary":"kısa özet"}
 highest_severity en ağır gerçek bulguyu göstermeli; bulgu yoksa none kullan.
 Bu son satır olmadan stage başarısız sayılacaktır.
+"@
+    } elseif ($StageName -eq 'converge') {
+@"
+
+[ZORUNLU CONVERGE ÇIKTI SÖZLEŞMESİ]
+Yukarıdaki Spec Kit converge davranışını aynen uygula. Hiçbir commit üretme.
+Normal raporundan sonra EN SON SATIRDA tam olarak şu biçimlerden birini yaz:
+SDD_CONVERGE_RESULT {"outcome":"converged","tasks_appended":0,"summary":"kısa özet"}
+SDD_CONVERGE_RESULT {"outcome":"tasks_appended","tasks_appended":3,"summary":"kısa özet"}
+Bu makine-okunur satır semantik kararını değiştirmez; yalnız orkestratör handoff'udur.
 "@
     } else { '' }
 
@@ -177,11 +297,12 @@ function Invoke-Stage {
         [Parameter(Mandatory)] [object] $Ledger,
         [string] $Arguments = '',
         [string] $Prompt = '',
-        [switch] $Resume
+        [switch] $Resume,
+        [object] $ProfileOverride
     )
 
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
-    $profile = $Config.agents.$Name
+    $profile = if ($ProfileOverride) { $ProfileOverride } else { $Config.agents.$Name }
     if (-not $profile) { throw "config.agents.$Name tanımlı değil." }
 
     $agentFn = Resolve-Adapter -AgentName $profile.agent
@@ -203,6 +324,7 @@ function Invoke-Stage {
         effort   = $profile.effort
         cwd      = $ProjectRoot
         log_path = $logPath
+        stream_partial = (Test-SddPartialStreaming)
     }
     if ($Resume -and $Ledger.stages.$Name.PSObject.Properties.Name -contains 'session_id' -and $Ledger.stages.$Name.session_id) {
         $req.resume_session = $Ledger.stages.$Name.session_id
@@ -256,7 +378,8 @@ function Invoke-Analyze {
         [Parameter(Mandatory)] [object] $Config,
         [Parameter(Mandatory)] [object] $Ledger,
         [Parameter(Mandatory)] [string] $ProjectRoot,
-        [switch] $Force
+        [switch] $Force,
+        [object] $ProfileOverride
     )
 
     function Get-AnalyzeValue([object] $Object, [string] $Name, $Default = $null) {
@@ -291,7 +414,7 @@ function Invoke-Analyze {
         return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = "Analyze temiz çalışma ağacı gerektirir: $($beforeDirty -join ' | ')" }
     }
 
-    $run = Invoke-Stage -Name 'analyze' -ProjectRoot $ProjectRoot -Config $Config -Ledger $Ledger
+    $run = Invoke-Stage -Name 'analyze' -ProjectRoot $ProjectRoot -Config $Config -Ledger $Ledger -ProfileOverride $ProfileOverride
     if (-not $run.ok) {
         return [pscustomobject]@{ ok = $false; blocked = $true; severity = 'critical'; output = 'Analyze agent çalışması tamamlanmadı.' }
     }

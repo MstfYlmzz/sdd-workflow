@@ -8,9 +8,9 @@
 # -----------------------------------------------------------------------------
 
 # --- Stage başına agent / model / effort -------------------------------------
-# `sdd` her çalıştığında bu seçimleri gösterir; Enter ile devam eder ya da
-# interaktif menüden değiştirirsin. Değiştirdiğinde buraya geri yazılır
-# (hafıza budur — her seferinde yeniden seçmezsin).
+# `sdd config [stage]` veya stage komutlarındaki `-Select` interaktif menüyü
+# açar. Değişiklik varsayılan olarak buraya geri yazılır; `-RunOnly` yalnız o
+# çalışma için seçim yapar. `-Agent/-Model/-Effort` de geçici override'dır.
 #
 # effort her sağlayıcıda farklı şey demektir; adapter kendi karşılığına çevirir:
 #   claude -> thinking bütçesi
@@ -25,6 +25,7 @@ agents:
   tasks:     { agent: cursor, model: auto, effort: medium }
   analyze:   { agent: claude, model: sonnet, effort: medium }
   implement: { agent: codex, model: gpt-5.6-sol, effort: medium }
+  converge:  { agent: codex, model: gpt-5.6-sol, effort: high }
 
 # --- Tier 1 kapıları ---------------------------------------------------------
 # "Proje hâlâ ayakta mı?" kontrolü bu komutları çalıştırıp exit code'a bakar.
@@ -49,6 +50,13 @@ loop:
   escalate_at:     2    # kaçıncı denemede seçili model korunup effort yükseltilir
   circuit_breaker: 3    # kaç ARDIŞIK batch hatasından sonra insana dönülür
   observe_every:   0    # 0 = durmadan ak; N = her N batch'te dur ve devamı bekle
+  enable_converge: true # final strict Tier 1 sonrası Spec Kit converge çalıştır
+  max_converge_rounds: 3 # implement<->converge sonsuz döngü koruması
+
+# --- Terminal UI -------------------------------------------------------------
+ui:
+  mode: auto                 # auto | plain | tui | raw
+  prompt_on_stage_start: false # true ise interaktif stage'lerde routing sor
 
 # --- Analyze davranışı -------------------------------------------------------
 # Analyze her zaman otonom koşar ve rapor üretir. Rapordaki bulgu bu seviyede

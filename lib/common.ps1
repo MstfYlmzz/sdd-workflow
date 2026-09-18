@@ -36,6 +36,7 @@ function Get-SddPaths {
         SddDir    = $sdd
         Config    = Join-Path $sdd 'config.yaml'
         State     = Join-Path $sdd 'state.json'
+        Runs      = Join-Path $sdd 'runs.jsonl'
         SpecsDir  = Join-Path $sdd 'specs'
         LogsDir   = Join-Path $sdd 'logs'
     }
@@ -189,6 +190,17 @@ function Write-SddLog {
         [ValidateSet('info','warn','error','stream')] [string] $Level = 'info'
     )
 
+    # events.ps1 yüklüyse tek yazıcı event bus'tır. Guard, event bus'ın dosya
+    # yazarken tekrar kendisine dönmesini engeller.
+    $sinkEnabled = Get-Variable -Scope Script -Name SddEventSinkEnabled -ValueOnly -ErrorAction SilentlyContinue
+    $inEvent = Get-Variable -Scope Script -Name InSddEvent -ValueOnly -ErrorAction SilentlyContinue
+    if ($sinkEnabled -and -not $inEvent -and
+        (Get-Command Send-SddEvent -ErrorAction SilentlyContinue)) {
+        $category = if ($Level -eq 'stream') { 'command_output' } elseif ($Level -eq 'error') { 'error' } else { 'workflow' }
+        Send-SddEvent -Message $Message -LogPath $LogPath -Level $Level -Category $category -EventType 'log'
+        return
+    }
+
     $stamp = (Get-Date).ToString('HH:mm:ss')
     $prefix = switch ($Level) {
         'warn'   { '[!]' }
@@ -208,6 +220,26 @@ function Write-SddLog {
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         Add-Content -LiteralPath $LogPath -Value $line
     }
+}
+
+# Adapter testleri events.ps1'i ayrıca yüklemese de aynı çağrı sözleşmesini
+# kullanabilsin. events.ps1 dot-source edildiğinde bu fallback'i override eder.
+if (-not (Get-Command Send-SddEvent -ErrorAction SilentlyContinue)) {
+    function Send-SddEvent {
+        param(
+            [AllowEmptyString()] [string] $Message = '', [string] $LogPath,
+            [ValidateSet('info','warn','error','stream')] [string] $Level = 'info',
+            [string] $Category = 'workflow', [string] $EventType = 'message',
+            [string] $Source = 'orchestrator', [string] $Provider = '', [string] $Stage = '',
+            [string] $Status = '', [string] $Command = '', [Nullable[int]] $ExitCode,
+            [Nullable[long]] $DurationMs, [object] $Usage, [hashtable] $Metadata
+        )
+        Write-SddLog -Message $(if ($Command) { $Command } else { $Message }) -LogPath $LogPath -Level $Level
+    }
+}
+
+if (-not (Get-Command Test-SddPartialStreaming -ErrorAction SilentlyContinue)) {
+    function Test-SddPartialStreaming { return $false }
 }
 
 function Initialize-SddProject {
@@ -246,6 +278,14 @@ function Initialize-SddProject {
         if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null; $created.Add($d) }
     }
 
+    $ignorePath = Join-Path $ProjectRoot '.gitignore'
+    $ignoreLines = if (Test-Path -LiteralPath $ignorePath) { @(Get-Content -LiteralPath $ignorePath) } else { @() }
+    $missingIgnore = @('.sdd/logs/','.sdd/runs.jsonl') | Where-Object { $_ -notin $ignoreLines }
+    if ($missingIgnore.Count -gt 0) {
+        Add-Content -LiteralPath $ignorePath -Value $missingIgnore -Encoding utf8
+        $created.Add("$ignorePath  (SDD runtime ignore kuralları)")
+    } else { $skipped.Add("$ignorePath  (SDD runtime ignore kuralları)") }
+
     # config.yaml — varsa dokunma
     if (Test-Path -LiteralPath $paths.Config) {
         $skipped.Add($paths.Config)
@@ -269,6 +309,7 @@ function Initialize-SddProject {
                 tasks     = @{ status = 'not_started' }
                 analyze   = @{ status = 'not_started' }
                 implement = @{ status = 'not_started' }
+                converge  = @{ status = 'not_started'; round = 0 }
             }
             gate_baseline    = [ordered]@{}
             tasks            = @()

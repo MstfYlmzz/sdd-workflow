@@ -49,7 +49,7 @@ function Read-CursorEvent {
     if ([string]::IsNullOrWhiteSpace($Line)) { return }
     $evt = $null
     try { $evt = $Line | ConvertFrom-Json -ErrorAction Stop } catch { }
-    if ($null -eq $evt) { Write-SddLog -Message $Line -LogPath $LogPath -Level 'stream'; return }
+    if ($null -eq $evt) { Send-SddEvent -Message $Line -LogPath $LogPath -Level 'stream' -Category 'command_output' -EventType 'provider_raw' -Source 'provider' -Provider 'cursor'; return }
 
     $session = Get-CursorEventValue -Object $evt -Names @('session_id','sessionId','chat_id','chatId')
     if ($session) { $Result.session_id = [string]$session }
@@ -58,13 +58,15 @@ function Read-CursorEvent {
         ($evt.PSObject.Properties.Name -contains 'is_error' -and [bool]$evt.is_error)) {
         $msg = [string](Get-CursorEventValue -Object $evt -Names @('message','error','text'))
         if (-not $msg) { $msg = $Line }
-        $Result.denied.Add($msg); Write-SddLog -Message "HATA: $msg" -LogPath $LogPath -Level 'error'
+        $Result.denied.Add($msg); Send-SddEvent -Message $msg -LogPath $LogPath -Level 'error' -Category 'error' -EventType 'provider_error' -Source 'provider' -Provider 'cursor'
     }
     if ($type -match '(?i)result|complete|completed|done|finish') { $Result._completed = $true }
     foreach ($part in @(Get-CursorEventTexts -Event $evt)) {
         $MessageParts.Add($part); $Result.last_message = $part
-        Write-SddLog -Message $part -LogPath $LogPath -Level 'stream'
+        Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'cursor'
     }
+    $usage = Get-CursorEventValue -Object $evt -Names @('usage','token_usage','tokenUsage')
+    if ($usage) { $Result.usage = $usage; Send-SddEvent -Message 'Cursor usage alındı' -LogPath $LogPath -Category 'usage' -EventType 'usage' -Source 'provider' -Provider 'cursor' -Usage $usage }
 }
 
 function Invoke-CursorAgent {
@@ -73,6 +75,7 @@ function Invoke-CursorAgent {
     $args = [System.Collections.Generic.List[string]]::new()
     $args.Add('-p')
     $args.Add('--output-format'); $args.Add('stream-json')
+    if ($Request.ContainsKey('stream_partial') -and $Request.stream_partial) { $args.Add('--stream-partial-output') }
     $args.Add('--force')
     $args.Add('--sandbox'); $args.Add('disabled')
     $args.Add('--trust')
@@ -87,7 +90,7 @@ function Invoke-CursorAgent {
     $result = [ordered]@{
         ok = $false; session_id = $null
         denied = [System.Collections.Generic.List[string]]::new()
-        last_message = $null; log_path = $Request.log_path; _completed = $false
+        last_message = $null; log_path = $Request.log_path; usage = $null; _completed = $false
     }
     $parts = [System.Collections.Generic.List[string]]::new()
     $exitCode = -1
@@ -99,7 +102,7 @@ function Invoke-CursorAgent {
         $exitCode = $LASTEXITCODE
     } catch {
         $result.denied.Add($_.Exception.Message)
-        Write-SddLog -Message $_.Exception.Message -LogPath $Request.log_path -Level 'error'
+        Send-SddEvent -Message $_.Exception.Message -LogPath $Request.log_path -Level 'error' -Category 'error' -EventType 'adapter_error' -Source 'adapter' -Provider 'cursor'
     } finally { Pop-Location }
 
     if ($exitCode -ne 0) { $result.denied.Add("Cursor CLI exit code: $exitCode") }
