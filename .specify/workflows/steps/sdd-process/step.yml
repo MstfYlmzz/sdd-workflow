@@ -1,0 +1,5 @@
+step:
+  type_key: sdd-process
+  name: SDD Streaming Process
+  version: "0.1.0"
+  description: "Run a trusted local SDD command while forwarding stdout/stderr live to the parent Spec Kit process."
