@@ -21,7 +21,7 @@ function Show-Help {
     Write-Host '  sdd implement [-ObserveEvery N] [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd converge [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd config               tüm stage routinglerini sırayla ayarlar'
-    Write-Host '  sdd config <stage>       yalnız verilen stage’i interaktif ayarlar'
+    Write-Host '  sdd config <stage>       yalnız verilen stage routing ayarını değiştirir'
     Write-Host '  sdd config --json        routing bilgisini makine-okunur verir'
     Write-Host "  sdd config set <stage> -Agent A -Model M -Effort E`n"
 }
@@ -69,38 +69,38 @@ function Invoke-Sdd {
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}
       'config'{
-        if ($Rest.Count -eq 1 -and ([string]$Rest[0]) -eq '--json') {
+        $firstConfigArg = if ($Rest.Count -gt 0) { [string]$Rest[0] } else { '' }
+        if ($Rest.Count -eq 1 -and $firstConfigArg -eq '--json') {
             $doc = Get-SddSpectaConfigDocument -ProjectRoot $root
-            if (-not $doc) { throw 'SDD config okunamadı.' }
+            if ($null -eq $doc) { throw 'SDD config okunamadı.' }
             $doc | ConvertTo-Json -Depth 8
-            break
+            return
         }
-        if ($Rest.Count -ge 2 -and ([string]$Rest[0]) -eq 'set') {
+        if ($Rest.Count -ge 2 -and $firstConfigArg -eq 'set') {
             $stage = [string]$Rest[1]
-            if ($stage -notin @('spec','plan','tasks','analyze','implement','converge')) {
+            $validStages = @('spec','plan','tasks','analyze','implement','converge')
+            if ($stage -notin $validStages) {
                 throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'
             }
             $tail = @()
-            if ($Rest.Count -gt 2) { $tail = @($Rest[2..($Rest.Count-1)]) }
-            $o = Get-CommonArguments $tail
-            if ($o.remaining.Count -gt 0 -or
-                [string]::IsNullOrWhiteSpace([string]$o.agent) -or
-                [string]::IsNullOrWhiteSpace([string]$o.model) -or
-                [string]::IsNullOrWhiteSpace([string]$o.effort)) {
+            if ($Rest.Count -gt 2) { $tail = @($Rest[2..($Rest.Count - 1)]) }
+            $o = Get-CommonArguments -Arguments $tail
+            $agentValue = [string]$o.agent
+            $modelValue = [string]$o.model
+            $effortValue = [string]$o.effort
+            if ($o.remaining.Count -gt 0 -or -not $agentValue -or -not $modelValue -or -not $effortValue) {
                 throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'
             }
-            $null = Set-SddStageProfile -ConfigPath $paths.Config -StageName $stage -Agent ([string]$o.agent) -Model ([string]$o.model) -Effort ([string]$o.effort)
+            $null = Set-SddStageProfile -ConfigPath $paths.Config -StageName $stage -Agent $agentValue -Model $modelValue -Effort $effortValue
             $doc = Get-SddSpectaConfigDocument -ProjectRoot $root
             $doc | ConvertTo-Json -Depth 8
-            break
+            return
         }
-        $o = Get-CommonArguments $Rest
+        $o = Get-CommonArguments -Arguments $Rest
         if ($o.remaining.Count -gt 1) { throw 'Kullanım: sdd config [stage] [-RunOnly]' }
         $stage = 'all'
-        if ($o.remaining.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$o.remaining[0])) {
-            $stage = [string]$o.remaining[0]
-        }
-        $cfg = Read-SddConfig $paths.Config
+        if ($o.remaining.Count -gt 0) { $stage = [string]$o.remaining[0] }
+        $cfg = Read-SddConfig -ConfigPath $paths.Config
         $null = Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only
       }
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
