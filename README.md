@@ -312,8 +312,11 @@ raw event stream live to the parent Specify process; SpectaTUI already streams
 that process into its CLI output popup.
 
 Phase A does not require a SpectaTUI fork for workflow execution. Phase B adds
-an optional, pinned three-file source overlay for richer observability without
-replacing the stock binary.
+a pinned source overlay for richer observability without replacing the stock
+binary. Phase C keeps `sdd-native` as the same background CLI job but returns
+directly to the Overview dashboard, where a dedicated **SDD Runtime** pane shows
+parsed orchestration events while the normal Agent Output pane remains reserved
+for the selected coding-agent tmux session.
 
 Install the experimental UI side-by-side:
 
@@ -326,8 +329,9 @@ This build requires Git plus a Rust/Cargo stable toolchain. It is pinned to
 SpectaTUI 1.1.0 commit `c039831190588c336abf4adba8a0d7c91c148774`, runs its
 projection unit test and compile check, then installs as `spectatui-sdd`.
 
-The SDD engine writes a Git-ignored, read-only projection at
-`.specify/sdd-status.json`. Patched SpectaTUI uses it to show:
+The SDD engine writes Git-ignored, read-only projections at
+`.specify/sdd-status.json` and `.specify/sdd-events.json`. Patched SpectaTUI
+uses them to show:
 
 - explicit `conv` / Converge state
 - active batch and task IDs
@@ -335,8 +339,9 @@ The SDD engine writes a Git-ignored, read-only projection at
 - agent / model / effort
 - convergence round / max rounds
 - task done/pending/blocked counts
+- a capped, parsed runtime event feed without raw command-output spam
 
-The projection is marked non-authoritative and is never used by the SDD engine
+The projections are marked non-authoritative and are never used by the SDD engine
 for control decisions. `.sdd/state.json` remains the domain source of truth.
 
 ### Resume and convergence
