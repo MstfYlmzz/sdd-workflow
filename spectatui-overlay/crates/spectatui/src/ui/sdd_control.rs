@@ -131,6 +131,13 @@ fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
         ])
     };
 
+    let model_options = app.sdd_provider_models(&app.sdd_edit_agent);
+    let model_index = model_options
+        .iter()
+        .position(|model| model == &app.sdd_edit_model)
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+
     let mut lines = vec![
         Line::from(vec![
             Span::styled(" Stage  ", theme.dim_style),
@@ -138,10 +145,42 @@ fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::default(),
         row(0, "Agent", app.sdd_edit_agent.clone()),
-        row(1, "Model", app.sdd_edit_model.clone()),
+        row(
+            1,
+            "Model",
+            if model_options.is_empty() {
+                app.sdd_edit_model.clone()
+            } else {
+                format!(
+                    "{}  [{}/{}]",
+                    app.sdd_edit_model,
+                    model_index,
+                    model_options.len()
+                )
+            },
+        ),
         row(2, "Effort", app.sdd_edit_effort.clone()),
         Line::default(),
     ];
+
+    if app.sdd_route_field == 1 && !model_options.is_empty() {
+        let preview = model_options
+            .iter()
+            .enumerate()
+            .map(|(idx, model)| {
+                if model == &app.sdd_edit_model {
+                    format!("❯{model}")
+                } else {
+                    format!(" {model}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        lines.push(Line::from(vec![
+            Span::styled(" Models  ", theme.faint_style),
+            Span::styled(preview, theme.dim_style),
+        ]));
+    }
 
     if app.sdd_edit_agent == "cursor" {
         lines.push(Line::from(Span::styled(
@@ -150,7 +189,7 @@ fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
     lines.push(Line::from(Span::styled(
-        " Tab field · ←/→ cycle agent/effort · model: type/backspace/delete",
+        " ↑/↓ field · ←/→ choose value · Enter next value",
         theme.faint_style,
     )));
     lines.push(Line::from(vec![
