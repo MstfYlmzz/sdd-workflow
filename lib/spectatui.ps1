@@ -42,25 +42,38 @@ function Get-SddSpectaSpecId {
 function Get-SddSpectaStage {
     param([Parameter(Mandatory)] [object] $Ledger)
 
-    foreach ($name in @('converge','implement','analyze','tasks','plan','spec')) {
+    $ordered = @('spec','plan','tasks','analyze','implement')
+    $converge = Get-SddSpectaProperty -Object $Ledger.stages -Name 'converge'
+    $convStatus = [string](Get-SddSpectaProperty -Object $converge -Name 'status' -Default 'not_started')
+    $convRound = [int](Get-SddSpectaProperty -Object $converge -Name 'round' -Default 0)
+
+    # Gerçekten çalışan stage her şeyden önce gelir.
+    foreach ($name in @($ordered + 'converge')) {
         $stage = Get-SddSpectaProperty -Object $Ledger.stages -Name $name
         if ($stage -and [string](Get-SddSpectaProperty -Object $stage -Name 'status' -Default '') -eq 'running') {
             return $name
         }
     }
 
-    $implement = Get-SddSpectaProperty -Object $Ledger.stages -Name 'implement'
-    $converge = Get-SddSpectaProperty -Object $Ledger.stages -Name 'converge'
-    $convRound = [int](Get-SddSpectaProperty -Object $converge -Name 'round' -Default 0)
-    $implStatus = [string](Get-SddSpectaProperty -Object $implement -Name 'status' -Default '')
-    if ($convRound -gt 0 -and $implStatus -ne 'running') { return 'converge' }
-
-    foreach ($name in @('implement','analyze','tasks','plan','spec')) {
-        $stage = Get-SddSpectaProperty -Object $Ledger.stages -Name $name
-        $status = [string](Get-SddSpectaProperty -Object $stage -Name 'status' -Default '')
-        if ($status -and $status -notin @('not_started','stale')) { return $name }
+    # Converge bir kez başladıysa (interrupted/completed dahil) kendi lifecycle
+    # stage'idir. round>0 eski ledger biçimleri için geriye uyumluluk sağlar.
+    if ($convRound -gt 0 -or $convStatus -in @('interrupted','completed','stale')) {
+        return 'converge'
     }
-    return 'spec'
+
+    # İlk tamamlanmamış upstream stage, kullanıcının bulunduğu/sonraki actionable
+    # stage'dir. Böylece analyze=completed + implement=not_started => implement.
+    foreach ($name in $ordered) {
+        $stage = Get-SddSpectaProperty -Object $Ledger.stages -Name $name
+        $status = [string](Get-SddSpectaProperty -Object $stage -Name 'status' -Default 'not_started')
+        if ($status -ne 'completed') {
+            return $name
+        }
+    }
+
+    # Implement tamamlandı, Converge henüz başlamadıysa UI implement-completed
+    # üzerinde kalır; Converge başladığında yukarıdaki kurallar onu devralır.
+    return 'implement'
 }
 
 function Get-SddSpectaConfigPath {
