@@ -1912,6 +1912,9 @@ mod tests {
             presets: Vec::new(),
             integrations: Vec::new(),
             workflows: Vec::new(),
+            sdd_status: None,
+            sdd_events: Vec::new(),
+            sdd_config: None,
         };
         App::new(project, AppConfig::default())
     }
