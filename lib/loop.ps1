@@ -137,6 +137,9 @@ function Save-LoopCheckpoint {
 
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
     Write-Ledger -Ledger $Ledger -StatePath $paths.State
+    if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger
+    }
     if (-not $StateOnly) { Render-TasksMd -Ledger $Ledger -OutPath $TasksMdPath }
 
     $stateRel = ConvertTo-GitRelativePath -ProjectRoot $ProjectRoot -Path $paths.State
@@ -412,6 +415,10 @@ function Invoke-ImplementLoop {
             $attemptedBatches++
             $ids = @($batch.id) -join ', '
             $candidateSha = Resolve-RevalidationCommit -ProjectRoot $ProjectRoot -Baseline $RevalidateFrom -CandidateCommit $CandidateCommit
+            if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+                $revalidateAttempt = [Math]::Max(1, [int](@($batch | ForEach-Object { [int]$_.attempts } | Measure-Object -Maximum).Maximum))
+                $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber $attemptedBatches -Attempt $revalidateAttempt -MaxAttempts $maxAttempts -Profile $baseProfile -StopReason 'revalidating'
+            }
             Write-SddLog -Message "[implement] mevcut candidate yeniden doğrulanıyor: $ids | $($candidateSha.Substring(0, 8))" -LogPath $logPath -Level 'info'
 
             $validation = Invoke-BatchValidation -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot `
@@ -455,6 +462,9 @@ function Invoke-ImplementLoop {
         $profile = if ($nextAttempt -ge $escalateAt) { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt $nextAttempt } else { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt 1 }
         $baseline = Get-GitBaseline -ProjectRoot $ProjectRoot
         $ids = @($batch.id) -join ', '
+        if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+            $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber $attemptedBatches -Attempt $nextAttempt -MaxAttempts $maxAttempts -Profile $profile -StopReason 'running'
+        }
         Write-SddLog -Message "[implement] batch ${attemptedBatches}: $ids | attempt=$nextAttempt | $($profile.agent)/$($profile.model)/$($profile.effort)" -LogPath $logPath -Level 'info'
 
         $prompt = Get-ImplementPrompt -Batch $batch -ProjectRoot $ProjectRoot -Baseline $baseline -PreviousFailure $retryFailure

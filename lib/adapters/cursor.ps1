@@ -77,6 +77,9 @@ function Read-CursorEvent {
         if ($isResult) {
             $Result.last_message = $part
             if ($MessageParts.Count -eq 0) { $MessageParts.Add($part) }
+            if ([bool]$Result._stream_partial -and -not [string]::IsNullOrWhiteSpace($part)) {
+                Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'cursor' -Status 'completed'
+            }
             continue
         }
         if ($isAssistant) {

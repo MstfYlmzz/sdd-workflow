@@ -28,7 +28,8 @@ function Resolve-SddUiMode {
 }
 
 function Test-SddPartialStreaming {
-    return [bool]($script:SddEventContext -and $script:SddEventContext.ui_mode -eq 'tui')
+    # raw modu Spec Kit/SpectaTUI bridge için line-oriented canlı event akışıdır.
+    return [bool]($script:SddEventContext -and $script:SddEventContext.ui_mode -in @('tui','raw'))
 }
 
 function Initialize-SddEventContext {
@@ -58,13 +59,25 @@ function Initialize-SddEventContext {
     if ($script:SddEventContext.ui_mode -eq 'tui' -and (Get-Command Start-SddLiveTui -ErrorAction SilentlyContinue)) {
         Start-SddLiveTui -Context $script:SddEventContext
     }
+    if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
+        $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $ProjectRoot -Stage $Stage -Status 'running'
+    }
+    if (Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaConfig -ProjectRoot $ProjectRoot
+    }
     Send-SddEvent -Message 'run başladı' -Category 'workflow' -EventType 'run_started' -Stage $Stage -Status 'running'
     return [pscustomobject]$script:SddEventContext
 }
 
 function Close-SddEventContext {
     param([ValidateSet('completed','failed','interrupted')] [string] $Status = 'completed')
-    if ($script:SddEventContext) { Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status }
+    if ($script:SddEventContext) {
+        Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status
+        if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
+            # Kapanışta generic event sonucu değil authoritative ledger durumu kazanır.
+            $null = Sync-SddSpectaStatusFromDisk -ProjectRoot ([string]$script:SddEventContext.project_root) -Stage ([string]$script:SddEventContext.stage)
+        }
+    }
     if ($script:SddEventContext -and $script:SddEventContext.tui_active -and
         (Get-Command Stop-SddLiveTui -ErrorAction SilentlyContinue)) {
         Stop-SddLiveTui -Context $script:SddEventContext
@@ -204,6 +217,9 @@ function Send-SddEvent {
 
     Write-SddEventLog -Event $evt -LogPath $LogPath
     [void](Write-SddTelemetryEvent -Event $evt -Path $script:SddEventContext.telemetry_path)
+    if (Get-Command Write-SddSpectaEvent -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaEvent -ProjectRoot ([string]$script:SddEventContext.project_root) -Event $evt
+    }
 
     switch ([string]$script:SddEventContext.ui_mode) {
         'raw' {
