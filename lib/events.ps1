@@ -59,13 +59,21 @@ function Initialize-SddEventContext {
     if ($script:SddEventContext.ui_mode -eq 'tui' -and (Get-Command Start-SddLiveTui -ErrorAction SilentlyContinue)) {
         Start-SddLiveTui -Context $script:SddEventContext
     }
+    if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
+        $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $ProjectRoot -Stage $Stage -Status 'running'
+    }
     Send-SddEvent -Message 'run başladı' -Category 'workflow' -EventType 'run_started' -Stage $Stage -Status 'running'
     return [pscustomobject]$script:SddEventContext
 }
 
 function Close-SddEventContext {
     param([ValidateSet('completed','failed','interrupted')] [string] $Status = 'completed')
-    if ($script:SddEventContext) { Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status }
+    if ($script:SddEventContext) {
+        Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status
+        if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
+            $null = Sync-SddSpectaStatusFromDisk -ProjectRoot ([string]$script:SddEventContext.project_root) -Stage ([string]$script:SddEventContext.stage) -Status $Status
+        }
+    }
     if ($script:SddEventContext -and $script:SddEventContext.tui_active -and
         (Get-Command Stop-SddLiveTui -ErrorAction SilentlyContinue)) {
         Stop-SddLiveTui -Context $script:SddEventContext
