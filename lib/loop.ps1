@@ -137,6 +137,9 @@ function Save-LoopCheckpoint {
 
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
     Write-Ledger -Ledger $Ledger -StatePath $paths.State
+    if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger
+    }
     if (-not $StateOnly) { Render-TasksMd -Ledger $Ledger -OutPath $TasksMdPath }
 
     $stateRel = ConvertTo-GitRelativePath -ProjectRoot $ProjectRoot -Path $paths.State
