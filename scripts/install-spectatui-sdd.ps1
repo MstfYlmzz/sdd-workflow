@@ -36,10 +36,15 @@ try {
     if ($head -ne $PinnedCommit) { throw "SpectaTUI source commit uyuşmuyor: $head" }
 
     $overlayFiles = @(
+        'crates/spectatui-core/src/speckit/cli.rs',
         'crates/spectatui-core/src/speckit/mod.rs',
+        'crates/spectatui/src/app.rs',
         'crates/spectatui/src/config.rs',
         'crates/spectatui/src/main.rs',
         'crates/spectatui/src/ui/mod.rs',
+        'crates/spectatui/src/ui/popup.rs',
+        'crates/spectatui/src/ui/sdd_agent.rs',
+        'crates/spectatui/src/ui/sdd_control.rs',
         'crates/spectatui/src/ui/sdd_runtime.rs',
         'crates/spectatui/src/ui/workflow.rs',
         'crates/spectatui/src/ui/workflows.rs'
