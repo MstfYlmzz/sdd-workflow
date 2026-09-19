@@ -4,7 +4,7 @@
    aktarılan çok satırlı -Prompt değeri Object[] olabilir. #>
 $supportedCommands=@('init','upgrade','self-update','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage')
 $Command=if($args.Count){[string]$args[0]}else{''}
-$Rest=if($args.Count-gt1){@($args[1..($args.Count-1)])}else{@()}
+$Rest=@(if($args.Count-gt1){$args[1..($args.Count-1)]})
 if($Command-and$Command-notin$supportedCommands){throw "Bilinmeyen SDD komutu: $Command"}
 $ErrorActionPreference='Stop'
 try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding']='utf8' } catch {}
