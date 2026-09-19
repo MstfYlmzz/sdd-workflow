@@ -89,6 +89,12 @@ try {
     $configProjection = Get-Content -LiteralPath $configProjectionPath -Raw | ConvertFrom-Json
     Assert-True (-not [bool]$configProjection.authoritative) 'Routing projection authoritative olmamalı.'
     Assert-True (@($configProjection.routes).Count -eq 6) 'Altı SDD stage routing satırı projection içinde olmalı.'
+    Assert-True (@($configProjection.providers).Count -eq 3) 'Üç provider model kataloğu routing projection içinde olmalı.'
+    $codexCatalog = @($configProjection.providers | Where-Object agent -eq 'codex')[0]
+    $claudeCatalog = @($configProjection.providers | Where-Object agent -eq 'claude')[0]
+    $cursorCatalog = @($configProjection.providers | Where-Object agent -eq 'cursor')[0]
+    Assert-True (@($codexCatalog.models).Count -gt 0 -and @($claudeCatalog.models).Count -gt 0 -and @($cursorCatalog.models).Count -gt 0) 'Her provider için seçilebilir model listesi bulunmalı.'
+    Assert-True (@($cursorCatalog.efforts).Count -eq 1 -and $cursorCatalog.efforts[0] -eq 'medium') 'Cursor effort listesi yalnız medium olmalı.'
     $implementRoute = @($configProjection.routes | Where-Object stage -eq 'implement')[0]
     Assert-True ($implementRoute.agent -and $implementRoute.model -and $implementRoute.effort) 'Implement routing bilgisi eksiksiz görünmeli.'
 
