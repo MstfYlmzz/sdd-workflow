@@ -99,11 +99,37 @@ function Get-SddSpectaConfigDocument {
         }
     }
 
+    $providers = foreach ($agentName in @('codex','claude','cursor')) {
+        $configuredModels = @($routes | Where-Object agent -eq $agentName | ForEach-Object { [string]$_.model } | Where-Object { $_ })
+        $knownModels = if (Get-Command Get-SddAgentModels -ErrorAction SilentlyContinue) {
+            @(Get-SddAgentModels -Agent $agentName)
+        } else {
+            switch ($agentName) {
+                'codex'  { @('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna') }
+                'claude' { @('sonnet','opus','haiku') }
+                default  { @('auto') }
+            }
+        }
+        $models = @(@($configuredModels)+@($knownModels) | Where-Object { $_ } | Select-Object -Unique)
+        $efforts = if ($agentName -eq 'cursor') { @('medium') } else { @('low','medium','high','xhigh','max') }
+        $available = $true
+        if (Get-Command Get-SddAgentCapabilities -ErrorAction SilentlyContinue) {
+            try { $available = [bool](Get-SddAgentCapabilities -Agent $agentName).available } catch { $available = $false }
+        }
+        [pscustomobject][ordered]@{
+            agent = $agentName
+            available = $available
+            models = @($models)
+            efforts = @($efforts)
+        }
+    }
+
     [pscustomobject][ordered]@{
         schema_version = 1
         authoritative = $false
         updated_at = (Get-Date).ToUniversalTime().ToString('o')
         routes = @($routes)
+        providers = @($providers)
     }
 }
 
