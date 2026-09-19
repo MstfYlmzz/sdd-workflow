@@ -119,7 +119,12 @@ function Write-SddSpectaEvent {
     $runId = [string](Get-SddSpectaProperty -Object $Event -Name 'run_id' -Default '')
     $provider = [string](Get-SddSpectaProperty -Object $Event -Name 'provider' -Default '')
     $stage = [string](Get-SddSpectaProperty -Object $Event -Name 'stage' -Default '')
-    $message = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
+    $rawMessage = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
+    $message = if (Get-Command ConvertTo-SddSafeText -ErrorAction SilentlyContinue) {
+        [string](ConvertTo-SddSafeText -Value $rawMessage -MaxLength 6000)
+    } else {
+        $rawMessage
+    }
     $partialKey = "$runId|$provider|$stage"
 
     if ($eventType -eq 'agent_message_partial') {
