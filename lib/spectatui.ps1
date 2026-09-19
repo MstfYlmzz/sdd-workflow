@@ -114,7 +114,33 @@ function Write-SddSpectaEvent {
 
     $category = [string](Get-SddSpectaProperty -Object $Event -Name 'category' -Default '')
     $eventType = [string](Get-SddSpectaProperty -Object $Event -Name 'event_type' -Default '')
-    if ($category -eq 'command_output' -or $eventType -eq 'agent_message_partial') { return $null }
+    if ($category -eq 'command_output') { return $null }
+
+    $runId = [string](Get-SddSpectaProperty -Object $Event -Name 'run_id' -Default '')
+    $provider = [string](Get-SddSpectaProperty -Object $Event -Name 'provider' -Default '')
+    $stage = [string](Get-SddSpectaProperty -Object $Event -Name 'stage' -Default '')
+    $message = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
+    $partialKey = "$runId|$provider|$stage"
+
+    if ($eventType -eq 'agent_message_partial') {
+        if (-not (Get-Variable -Scope Script -Name SddSpectaPartialBuffers -ErrorAction SilentlyContinue)) {
+            $script:SddSpectaPartialBuffers = @{}
+            $script:SddSpectaPartialLastWrite = @{}
+        }
+        $prior = if ($script:SddSpectaPartialBuffers.ContainsKey($partialKey)) { [string]$script:SddSpectaPartialBuffers[$partialKey] } else { '' }
+        $combined = $prior + $message
+        if ($combined.Length -gt 6000) { $combined = '…' + $combined.Substring($combined.Length - 5999) }
+        $script:SddSpectaPartialBuffers[$partialKey] = $combined
+
+        $now = [DateTimeOffset]::UtcNow
+        if ($script:SddSpectaPartialLastWrite.ContainsKey($partialKey)) {
+            $last = [DateTimeOffset]$script:SddSpectaPartialLastWrite[$partialKey]
+            if (($now - $last).TotalMilliseconds -lt 250) { return $null }
+        }
+        $script:SddSpectaPartialLastWrite[$partialKey] = $now
+        $eventType = 'agent_message_live'
+        $message = $combined
+    }
 
     $path = Get-SddSpectaEventsPath -ProjectRoot $ProjectRoot
     $existingEvents = @()
@@ -127,17 +153,41 @@ function Write-SddSpectaEvent {
         }
     }
 
+    if ($eventType -eq 'agent_message_live') {
+        $existingEvents = @($existingEvents | Where-Object {
+            -not (
+                [string](Get-SddSpectaProperty -Object $_ -Name 'event_type' -Default '') -eq 'agent_message_live' -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'run_id' -Default '') -eq $runId -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'provider' -Default '') -eq $provider -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'stage' -Default '') -eq $stage
+            )
+        })
+    } elseif ($eventType -eq 'agent_message') {
+        $existingEvents = @($existingEvents | Where-Object {
+            -not (
+                [string](Get-SddSpectaProperty -Object $_ -Name 'event_type' -Default '') -eq 'agent_message_live' -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'run_id' -Default '') -eq $runId -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'provider' -Default '') -eq $provider -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'stage' -Default '') -eq $stage
+            )
+        })
+        if (Get-Variable -Scope Script -Name SddSpectaPartialBuffers -ErrorAction SilentlyContinue) {
+            $script:SddSpectaPartialBuffers.Remove($partialKey)
+            $script:SddSpectaPartialLastWrite.Remove($partialKey)
+        }
+    }
+
     $entry = [ordered]@{
         timestamp   = [string](Get-SddSpectaProperty -Object $Event -Name 'timestamp' -Default ((Get-Date).ToString('o')))
-        run_id      = [string](Get-SddSpectaProperty -Object $Event -Name 'run_id' -Default '')
+        run_id      = $runId
         sequence    = [int](Get-SddSpectaProperty -Object $Event -Name 'sequence' -Default 0)
-        stage       = [string](Get-SddSpectaProperty -Object $Event -Name 'stage' -Default '')
+        stage       = $stage
         category    = $category
         event_type  = $eventType
         severity    = [string](Get-SddSpectaProperty -Object $Event -Name 'severity' -Default 'info')
-        status      = [string](Get-SddSpectaProperty -Object $Event -Name 'status' -Default '')
-        message     = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
-        provider    = [string](Get-SddSpectaProperty -Object $Event -Name 'provider' -Default '')
+        status      = $(if ($eventType -eq 'agent_message_live') { 'running' } else { [string](Get-SddSpectaProperty -Object $Event -Name 'status' -Default '') })
+        message     = $message
+        provider    = $provider
         exit_code   = Get-SddSpectaProperty -Object $Event -Name 'exit_code' -Default $null
         duration_ms = Get-SddSpectaProperty -Object $Event -Name 'duration_ms' -Default $null
     }
