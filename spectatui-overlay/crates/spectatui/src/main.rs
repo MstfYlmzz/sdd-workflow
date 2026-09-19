@@ -613,34 +613,10 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
                     } else {
                         match key.code {
                             KeyCode::Esc => app.sdd_route_editing = false,
-                            KeyCode::Tab => {
-                                app.sdd_route_field = (app.sdd_route_field + 1) % 3;
-                            }
-                            KeyCode::BackTab => {
-                                app.sdd_route_field = (app.sdd_route_field + 2) % 3;
-                            }
-                            KeyCode::Left => match app.sdd_route_field {
-                                0 => app.cycle_sdd_agent(-1),
-                                2 => app.cycle_sdd_effort(-1),
-                                _ => {}
-                            },
-                            KeyCode::Right => match app.sdd_route_field {
-                                0 => app.cycle_sdd_agent(1),
-                                2 => app.cycle_sdd_effort(1),
-                                _ => {}
-                            },
-                            KeyCode::Backspace if app.sdd_route_field == 1 => {
-                                app.sdd_edit_model.pop();
-                            }
-                            KeyCode::Delete if app.sdd_route_field == 1 => {
-                                app.sdd_edit_model.clear();
-                            }
-                            KeyCode::Char(c)
-                                if app.sdd_route_field == 1
-                                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
-                                app.sdd_edit_model.push(c);
-                            }
+                            KeyCode::Up | KeyCode::Char('k') => app.sdd_route_field_prev(),
+                            KeyCode::Down | KeyCode::Char('j') => app.sdd_route_field_next(),
+                            KeyCode::Left => app.cycle_sdd_route_value(-1),
+                            KeyCode::Right | KeyCode::Enter => app.cycle_sdd_route_value(1),
                             _ => {}
                         }
                     }
