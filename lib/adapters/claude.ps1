@@ -66,8 +66,13 @@ function Read-ClaudeEvent {
             }
         }
         'stream_event' {
-            if ($evt.event -and $evt.event.delta -and $evt.event.delta.type -eq 'text_delta') {
-                Send-SddEvent -Message ([string]$evt.event.delta.text) -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message_partial' -Source 'provider' -Provider 'claude'
+            $event = if ($evt.PSObject.Properties.Name -contains 'event') { $evt.event } else { $null }
+            $delta = if ($event -and $event.PSObject.Properties.Name -contains 'delta') { $event.delta } else { $null }
+            if ($delta -and
+                $delta.PSObject.Properties.Name -contains 'type' -and
+                $delta.type -eq 'text_delta' -and
+                $delta.PSObject.Properties.Name -contains 'text') {
+                Send-SddEvent -Message ([string]$delta.text) -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message_partial' -Source 'provider' -Provider 'claude'
             }
         }
         'result' {
