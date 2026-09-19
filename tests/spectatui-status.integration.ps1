@@ -6,6 +6,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot 'lib/common.ps1')
 . (Join-Path $repoRoot 'lib/ledger.ps1')
 . (Join-Path $repoRoot 'lib/spectatui.ps1')
+. (Join-Path $repoRoot 'lib/stages.ps1')
 . (Join-Path $repoRoot 'lib/tier0.ps1')
 
 function Assert-True([bool] $Condition, [string] $Message) {
@@ -54,6 +55,20 @@ try {
     Assert-True ($doc.runtime.batch_number -eq 4 -and $doc.runtime.attempt -eq 2 -and $doc.runtime.max_attempts -eq 3) 'Batch/retry metadata görünmeli.'
     Assert-True ($doc.runtime.agent -eq 'codex' -and $doc.runtime.model -eq 'gpt-test' -and $doc.runtime.effort -eq 'high') 'Routing metadata görünmeli.'
 
+    $null = Write-SddSpectaConfig -ProjectRoot $fixture
+    $configProjectionPath = Join-Path $fixture '.specify/sdd-config.json'
+    Assert-True (Test-Path -LiteralPath $configProjectionPath) 'Routing projection üretilmeli.'
+    $configProjection = Get-Content -LiteralPath $configProjectionPath -Raw | ConvertFrom-Json
+    Assert-True (-not [bool]$configProjection.authoritative) 'Routing projection authoritative olmamalı.'
+    Assert-True (@($configProjection.routes).Count -eq 6) 'Altı SDD stage routing satırı projection içinde olmalı.'
+    $implementRoute = @($configProjection.routes | Where-Object stage -eq 'implement')[0]
+    Assert-True ($implementRoute.agent -and $implementRoute.model -and $implementRoute.effort) 'Implement routing bilgisi eksiksiz görünmeli.'
+
+    $null = Set-SddStageProfile -ConfigPath (Join-Path $fixture '.sdd/config.yaml') -StageName analyze -Agent claude -Model sonnet -Effort high
+    $configProjection = Get-Content -LiteralPath $configProjectionPath -Raw | ConvertFrom-Json
+    $analyzeRoute = @($configProjection.routes | Where-Object stage -eq 'analyze')[0]
+    Assert-True ($analyzeRoute.agent -eq 'claude' -and $analyzeRoute.model -eq 'sonnet' -and $analyzeRoute.effort -eq 'high') 'Config değişikliği routing projectiona anında yansımalı.'
+
     $event = [pscustomobject]@{
         timestamp='2026-09-19T21:18:05+03:00';run_id='run-1';sequence=28;stage='implement'
         category='gate';event_type='gate_completed';severity='info';status='failed'
@@ -99,6 +114,8 @@ try {
         Assert-True ($LASTEXITCODE -eq 0) 'Projection Git-ignore edilmiş olmalı.'
         & git check-ignore -q .specify/sdd-events.json
         Assert-True ($LASTEXITCODE -eq 0) 'Event projection Git-ignore edilmiş olmalı.'
+        & git check-ignore -q .specify/sdd-config.json
+        Assert-True ($LASTEXITCODE -eq 0) 'Routing projection Git-ignore edilmiş olmalı.'
 
         & git add .
         & git -c user.email=sdd-test@example.invalid -c user.name=SDD-Test commit -m baseline --quiet
