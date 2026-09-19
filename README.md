@@ -268,15 +268,46 @@ This installs:
 The project must already have an active feature with committed spec.md, plan.md
 and tasks.md and a clean worktree.
 
-### Run from SpectaTUI
+### Run and control SDD from SpectaTUI
 
-Open **Automation Workflows**, select **SDD Native Closure**, then:
+Install and open the side-by-side patched UI:
 
-- r — run
-- R — resume last run
-- s — workflow status/history
+~~~powershell
+sdd upgrade
+sdd spectatui install
+spectatui-sdd -p .
+~~~
 
-Phase A runs:
+The overlay is pinned to SpectaTUI 1.1.0 commit
+`c039831190588c336abf4adba8a0d7c91c148774`. Stock `spectatui`, `sdd tui`
+and all normal `sdd` CLI paths remain available.
+
+For the full workflow, **Automation Workflows → SDD Native Closure** still
+provides native Spec Kit run/resume/status. The SDD-specific control surface is
+also available directly with `D` / **SDD Control**:
+
+- `f` — run the full SDD workflow
+- `R` — resume its latest run
+- `r` — run only the selected SDD stage
+- `e` — edit that stage's agent/model/effort routing
+
+Routing edits go through the SDD backend and persist to the authoritative
+`.sdd/config.yaml`; SpectaTUI never writes that YAML itself.
+
+The Overview dashboard separates output into:
+
+- **Workflow** — lifecycle position
+- **SDD Runtime** — embedded batch/retry/gate/Converge events
+- **SDD Agent** — normalized, parsed Codex/Claude/Cursor messages and tool events
+- **Agent Output** — the original SpectaTUI tmux/coding-agent pane, preserved
+  unchanged and always available through the normal Coding/attach-agent paths
+
+The SDD engine writes Git-ignored, non-authoritative projections at
+`.specify/sdd-status.json`, `.specify/sdd-events.json`, and
+`.specify/sdd-config.json`. `.sdd/state.json` and `.sdd/config.yaml`
+remain the domain sources of truth.
+
+Full workflow execution remains:
 
 ~~~text
 tasks-ready
@@ -290,59 +321,9 @@ tasks-ready
     → clean convergence
 ~~~
 
-Agent/model/effort are **not** stored in the workflow YAML. They continue to
-come from .sdd/config.yaml, so Codex/Claude/Cursor routing stays identical to the
-legacy path.
-
-### State ownership
-
-- .specify/workflows/runs/<run-id>/... = pipeline execution position and
-  run/resume/status state.
-- .sdd/state.json = authoritative SDD domain state: tasks, attempts, sessions,
-  validation, routing metadata and convergence.
-
-Spec Kit run state is machine-local and Git-ignored; it is never a second task
-ledger.
-
-### Live output
-
-A small project-local Spec Kit step named sdd-process is used because the stock
-Spec Kit shell step buffers child output. sdd-process forwards the existing SDD
-raw event stream live to the parent Specify process; SpectaTUI already streams
-that process into its CLI output popup.
-
-Phase A does not require a SpectaTUI fork for workflow execution. Phase B adds
-a pinned source overlay for richer observability without replacing the stock
-binary. Phase C keeps `sdd-native` as the same background CLI job but returns
-directly to the Overview dashboard, where a dedicated **SDD Runtime** pane shows
-parsed orchestration events while the normal Agent Output pane remains reserved
-for the selected coding-agent tmux session.
-
-Install the experimental UI side-by-side:
-
-~~~powershell
-sdd spectatui install
-spectatui-sdd -p .
-~~~
-
-This build requires Git plus a Rust/Cargo stable toolchain. It is pinned to
-SpectaTUI 1.1.0 commit `c039831190588c336abf4adba8a0d7c91c148774`, runs its
-projection unit test and compile check, then installs as `spectatui-sdd`.
-
-The SDD engine writes Git-ignored, read-only projections at
-`.specify/sdd-status.json` and `.specify/sdd-events.json`. Patched SpectaTUI
-uses them to show:
-
-- explicit `conv` / Converge state
-- active batch and task IDs
-- retry attempt / max attempts
-- agent / model / effort
-- convergence round / max rounds
-- task done/pending/blocked counts
-- a capped, parsed runtime event feed without raw command-output spam
-
-The projections are marked non-authoritative and are never used by the SDD engine
-for control decisions. `.sdd/state.json` remains the domain source of truth.
+Provider/model/effort are still config-driven; they are not stored in workflow
+YAML. Raw CLI output remains available for debugging, but normal SDD operation
+returns to the dashboard instead of forcing the raw-output popup.
 
 ### Resume and convergence
 
