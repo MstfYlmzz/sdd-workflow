@@ -16,6 +16,8 @@ try {
     function global:claude {
         Set-Content -LiteralPath $global:CLAUDE_MOCK_CAPTURE -Value @($args) -Encoding utf8
         '{"type":"system","subtype":"init","session_id":"claude-session"}'
+        '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-1"}}}'
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}}'
         '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
         '{"type":"result","subtype":"success","is_error":false,"result":"claude done","session_id":"claude-session","permission_denials":[]}'
         $global:LASTEXITCODE = 0
