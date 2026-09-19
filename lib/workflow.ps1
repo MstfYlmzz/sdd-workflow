@@ -111,8 +111,9 @@ function Invoke-SddWorkflowStep {
                     return [pscustomobject]@{ ok=$true; step='closure'; pause=$true; result=$result }
                 }
 
-                $detail = if ($result.output) { [string]$result.output } else { [string]$result.reason }
-                throw "Autonomous closure durdu: $($result.reason). $detail"
+                $reason = [string](Get-WorkflowProperty -Object $result -Name 'reason' -Default 'unknown')
+                $detail = [string](Get-WorkflowProperty -Object $result -Name 'output' -Default $reason)
+                throw "Autonomous closure durdu: $reason. $detail"
             }
         }
     } catch {
