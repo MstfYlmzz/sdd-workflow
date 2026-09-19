@@ -105,6 +105,28 @@ try {
     $eventDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
     Assert-True (@($eventDoc.events).Count -eq 1) 'Ham command output parsed runtime event feedini şişirmemeli.'
 
+    $partialEvent = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:07+03:00';run_id='run-1';sequence=30;stage='implement'
+        category='assistant';event_type='agent_message_partial';severity='info';status=''
+        message='Hello ';provider='cursor';exit_code=$null;duration_ms=$null
+    }
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $partialEvent
+    $partialEvent.sequence = 31
+    $partialEvent.message = 'world'
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $partialEvent
+    $liveDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
+    Assert-True (@($liveDoc.events | Where-Object event_type -eq 'agent_message_live').Count -le 1) 'Partial agent deltaları tek canlı mesaja coalesce edilmeli.'
+
+    $finalAgentEvent = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:08+03:00';run_id='run-1';sequence=32;stage='implement'
+        category='assistant';event_type='agent_message';severity='info';status='completed'
+        message='Hello world';provider='cursor';exit_code=$null;duration_ms=$null
+    }
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $finalAgentEvent
+    $finalAgentDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
+    Assert-True (@($finalAgentDoc.events | Where-Object event_type -eq 'agent_message_live').Count -eq 0) 'Final agent mesajı canlı partial kaydını temizlemeli.'
+    Assert-True (@($finalAgentDoc.events | Where-Object { $_.event_type -eq 'agent_message' -and $_.message -eq 'Hello world' }).Count -eq 1) 'Parsed Agent Output final mesajı korumalı.'
+
     $ledger.stages.implement.status = 'completed'
     $ledger.stages.converge.status = 'running'
     $ledger.stages.converge | Add-Member -NotePropertyName round -NotePropertyValue 2 -Force
