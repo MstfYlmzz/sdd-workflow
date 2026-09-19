@@ -12,6 +12,8 @@ mod popup;
 mod presets;
 mod session_attach;
 mod settings;
+mod sdd_agent;
+mod sdd_control;
 mod sdd_runtime;
 mod spec_browser;
 mod statusbar;
@@ -263,15 +265,26 @@ fn draw_dashboard(frame: &mut Frame, app: &App, area: Rect) {
             workflow::draw(frame, app, right[0]);
 
             if app.project.sdd_status.is_some() && right[1].height >= 18 {
-                let runtime_h = (right[1].height / 2).clamp(8, 12);
-                let lower = Layout::vertical([
-                    Constraint::Length(runtime_h),
-                    Constraint::Min(0),
-                ])
-                .split(right[1]);
-                sdd_runtime::draw(frame, app, lower[0]);
-                app.register_click(lower[1], ClickAction::FocusPane(Pane::AgentOutput));
-                agent_output::draw(frame, app, lower[1]);
+                if right[1].height >= 24 {
+                    let lower = Layout::vertical([
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Min(8),
+                    ])
+                    .split(right[1]);
+                    sdd_runtime::draw(frame, app, lower[0]);
+                    sdd_agent::draw(frame, app, lower[1]);
+                    app.register_click(lower[2], ClickAction::FocusPane(Pane::AgentOutput));
+                    agent_output::draw(frame, app, lower[2]);
+                } else {
+                    let lower = Layout::vertical([
+                        Constraint::Length(8),
+                        Constraint::Min(0),
+                    ])
+                    .split(right[1]);
+                    sdd_runtime::draw(frame, app, lower[0]);
+                    sdd_agent::draw(frame, app, lower[1]);
+                }
             } else {
                 app.register_click(right[1], ClickAction::FocusPane(Pane::AgentOutput));
                 agent_output::draw(frame, app, right[1]);
