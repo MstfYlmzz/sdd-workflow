@@ -28,7 +28,8 @@ function Resolve-SddUiMode {
 }
 
 function Test-SddPartialStreaming {
-    return [bool]($script:SddEventContext -and $script:SddEventContext.ui_mode -eq 'tui')
+    # raw modu Spec Kit/SpectaTUI bridge için line-oriented canlı event akışıdır.
+    return [bool]($script:SddEventContext -and $script:SddEventContext.ui_mode -in @('tui','raw'))
 }
 
 function Initialize-SddEventContext {
