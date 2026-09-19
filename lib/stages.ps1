@@ -258,28 +258,74 @@ function Select-SddMenuItem {
 }
 
 function Get-SddAgentModels {
-    param([Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent,[string]$CurrentModel='')
+    param(
+        [Parameter(Mandatory)] [ValidateSet('codex','claude','cursor')] [string] $Agent,
+        [string] $CurrentModel=''
+    )
 
     if (-not (Get-Variable -Scope Script -Name SddAgentModelCache -ErrorAction SilentlyContinue)) {
         $script:SddAgentModelCache = @{}
     }
 
     if ($script:SddAgentModelCache.ContainsKey($Agent)) {
-        return @(@($CurrentModel)+@($script:SddAgentModelCache[$Agent])|Where-Object{$_}|Select-Object -Unique)
+        return @(
+            @($CurrentModel) +
+            @($script:SddAgentModelCache[$Agent]) |
+            Where-Object { $_ } |
+            Select-Object -Unique
+        )
     }
 
-    $fallback=switch($Agent){'claude'{@('sonnet','opus','haiku')};'codex'{@('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna')};default{@('auto')}}
-    $cap=Get-SddAgentCapabilities -Agent $Agent;$discovered=@()
-    if($cap.available){
-        try{
-            if($Agent-eq'cursor'){$output=@(& $cap.command --list-models 2>$null);if($LASTEXITCODE-eq0){$discovered=$output}}
-            else{
-                $help=@(& $cap.command --help 2>$null)
-                if(($help-join"`n")-match'(?mi)^\s+models?\s'){$output=@(& $cap.command models 2>$null);if($LASTEXITCODE-eq0){$discovered=$output}}
-            }
-        }catch{}
+    $fallback = switch ($Agent) {
+        'claude' { @('sonnet','opus','haiku') }
+        'codex'  { @('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna') }
+        default  { @('auto') }
     }
-    $parsed=@($discovered|ForEach-Object{([string]$_).Trim()-replace'^[>*\-\s]+',''}|ForEach-Object{($_-split'\s+')[0]}|Where-Object{$_-match'^[A-Za-z0-9][A-Za-z0-9._:/-]+
+
+    $cap = Get-SddAgentCapabilities -Agent $Agent
+    $discovered = @()
+
+    if ($cap.available) {
+        try {
+            if ($Agent -eq 'cursor') {
+                $output = @(& $cap.command --list-models 2>$null)
+                if ($LASTEXITCODE -eq 0) { $discovered = $output }
+            } else {
+                $help = @(& $cap.command --help 2>$null)
+                if (($help -join "`n") -match '(?mi)^\s+models?\s') {
+                    $output = @(& $cap.command models 2>$null)
+                    if ($LASTEXITCODE -eq 0) { $discovered = $output }
+                }
+            }
+        } catch {}
+    }
+
+    $parsed = @(
+        $discovered |
+        ForEach-Object { ([string]$_).Trim() -replace '^[>*\-\s]+','' } |
+        ForEach-Object { ($_ -split '\s+')[0] } |
+        Where-Object {
+            $_ -match '^[A-Za-z0-9][A-Za-z0-9._:/-]+$' -and
+            $_ -notmatch '(?i)^available$'
+        }
+    )
+
+    $base = @(
+        @($fallback) +
+        @($parsed) |
+        Where-Object { $_ } |
+        Select-Object -Unique
+    )
+
+    $script:SddAgentModelCache[$Agent] = @($base)
+
+    return @(
+        @($CurrentModel) +
+        @($base) |
+        Where-Object { $_ } |
+        Select-Object -Unique
+    )
+}
 
 function Show-AgentSelection {
     <#
