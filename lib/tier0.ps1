@@ -61,6 +61,7 @@ function Get-GitStatusForTier0 {
         ':(exclude).sdd/logs/**',
         ':(exclude).sdd/runs.jsonl',
         ':(exclude).sdd/config.yaml',
+        ':(exclude).sdd/state.json',
         ':(exclude).specify/sdd-status.json',
         ':(exclude).specify/sdd-status.json.tmp',
         ':(exclude).specify/sdd-events.json',
