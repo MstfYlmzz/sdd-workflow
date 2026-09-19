@@ -306,38 +306,80 @@ remain available as fallback paths.
 
 ## Phase C runtime UX
 
-Phase C keeps the Spec Kit workflow as the execution owner but stops treating its
-raw subprocess output as the primary SDD user interface.
+Phase C keeps the Spec Kit workflow as the full-pipeline execution owner but
+makes SpectaTUI the operational control surface.
 
-- `sdd-native` run/resume jobs start as background CLI jobs and return directly
-  to the Overview dashboard.
-- The Overview dashboard adds a read-only **SDD Runtime** pane between the
-  lifecycle pane and the normal coding-agent output pane when an SDD projection
-  is present.
-- Meaningful SDD events are projected to `.specify/sdd-events.json` as a capped,
-  non-authoritative event feed. Raw command-output and partial-token events are
-  deliberately excluded so the pane stays operational rather than becoming a
-  JSON/log console.
-- The existing CLI job still captures the full raw output for debugging; it is
-  no longer forced open for `sdd-native`.
-- New SpectaTUI installs default their UI config to `~/.spectatui.toml` instead
-  of creating `./.spectatui.toml` in every project. The SDD clean-worktree
-  check also ignores a legacy project-local `.spectatui.toml`.
-- The Agent Output pane remains dedicated to the selected feature's tmux coding
-  agent session. It is not repurposed as the orchestration console.
+### Overview layout
 
-### Remaining UX gaps
+When an SDD projection is active, the Overview dashboard is split into distinct
+responsibilities:
 
-- token/provider usage is still available in SDD telemetry but not yet summarized
-  in the rich runtime pane
-- workflow input collection for starting a brand-new spec from free-form user
-  text is not implemented; the PoC starts from an existing tasks artifact
-- the Phase C runtime pane is intentionally read-only; pause/resume and raw-log
-  drill-down still use the workflow manager / CLI job surfaces
-- interactive Windows-terminal latency and idle-CPU measurements are still
-  required before the legacy PowerShell TUI can be considered removable
+- **Workflow** — lifecycle/stage progression.
+- **SDD Runtime** — embedded orchestration events: batch, retry, validation,
+  gate, Converge and stop state.
+- **SDD Agent** — parsed provider output from the SDD event bus: assistant
+  messages, reasoning summaries, tool activity and usage markers. Provider JSON
+  is not rendered directly; streaming deltas are coalesced into a live message.
+- **Agent Output** — the original upstream SpectaTUI tmux/coding-agent pane.
+  This is not replaced. On taller Overview layouts it remains visible below the
+  SDD panes, and the normal Coding layout / attach-session flow always preserves
+  the stock agent experience.
 
-These are UI/observability/input gaps, not domain-engine gaps.
+The runtime and parsed-agent panes are embedded, not popups. Raw CLI output
+remains available as a debugging surface but is no longer forced open for
+`sdd-native` or single-stage SDD runs.
+
+### SDD Control
+
+Press `D` (or use the command palette entry **SDD Control**) to open the SDD
+control popup. It operates through the existing SDD CLI/domain engine rather than
+reimplementing domain semantics in Rust:
+
+- `f` — run the full `sdd-native` Spec Kit workflow.
+- `R` — resume the last `sdd-native` workflow run.
+- `r` — run only the selected stage using the normal
+  `sdd spec|plan|tasks|analyze|implement|converge -Ui raw` path.
+- `e` / Enter — edit the selected stage routing.
+- route editor: Tab changes field, arrows cycle agent/effort, model is editable
+  text, Ctrl+S saves, Esc cancels.
+
+The routing editor calls a machine-facing SDD config API:
+
+- `sdd config --json`
+- `sdd config set <stage> -Agent A -Model M -Effort E`
+
+Rust never edits `.sdd/config.yaml` directly. That YAML remains the authoritative
+routing configuration. The UI reads a Git-ignored, non-authoritative
+`.specify/sdd-config.json` projection.
+
+### Projection files
+
+The overlay consumes three Git-ignored projections:
+
+- `.specify/sdd-status.json` — current stage/task/batch/retry/route/Converge state.
+- `.specify/sdd-events.json` — capped parsed runtime/provider event feed.
+- `.specify/sdd-config.json` — routing rows for the control popup.
+
+All three are marked non-authoritative. `.sdd/state.json` and
+`.sdd/config.yaml` remain the domain sources of truth.
+
+New SpectaTUI installs default their own UI config to `~/.spectatui.toml`
+instead of writing `./.spectatui.toml` into the project. A legacy project-local
+`.spectatui.toml` is also excluded from the SDD clean-worktree gate.
+
+### Remaining acceptance gaps
+
+- interactive Windows-terminal startup, keypress/render, projection refresh,
+  streaming latency and idle-CPU measurements are still required
+- free-form input UX for starting a brand-new spec is not part of this control
+  popup; single-stage execution uses the existing stage context
+- token/provider usage is normalized in events but does not yet have a dedicated
+  aggregate cost/usage view
+- route edits modify the authoritative project `.sdd/config.yaml`; projects
+  that track this file should commit that intentional config change before a
+  full workflow requiring a clean worktree
+
+These are UI/input/acceptance gaps, not duplicated SDD domain semantics.
 
 ## Tests
 
