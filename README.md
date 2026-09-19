@@ -311,8 +311,33 @@ Spec Kit shell step buffers child output. sdd-process forwards the existing SDD
 raw event stream live to the parent Specify process; SpectaTUI already streams
 that process into its CLI output popup.
 
-Phase A does **not** fork or patch SpectaTUI. Rich parsing of SDD events and an
-explicit Converge badge in the main SpectaTUI dashboard are Phase B work.
+Phase A does not require a SpectaTUI fork for workflow execution. Phase B adds
+an optional, pinned three-file source overlay for richer observability without
+replacing the stock binary.
+
+Install the experimental UI side-by-side:
+
+~~~powershell
+sdd spectatui install
+spectatui-sdd -p .
+~~~
+
+This build requires Git plus a Rust/Cargo stable toolchain. It is pinned to
+SpectaTUI 1.1.0 commit `c039831190588c336abf4adba8a0d7c91c148774`, runs its
+projection unit test and compile check, then installs as `spectatui-sdd`.
+
+The SDD engine writes a Git-ignored, read-only projection at
+`.specify/sdd-status.json`. Patched SpectaTUI uses it to show:
+
+- explicit `conv` / Converge state
+- active batch and task IDs
+- retry attempt / max attempts
+- agent / model / effort
+- convergence round / max rounds
+- task done/pending/blocked counts
+
+The projection is marked non-authoritative and is never used by the SDD engine
+for control decisions. `.sdd/state.json` remains the domain source of truth.
 
 ### Resume and convergence
 
@@ -325,5 +350,5 @@ append-only/write-boundary checks.
 For the full semantics matrix, architecture decision, test coverage, and known
 limitations see docs/SPECTATUI_NATIVE_WORKFLOW.md.
 
-The old PowerShell TUI must not be removed until Phase B observability and real
-terminal performance measurements are complete.
+The old PowerShell TUI must not be removed until the patched UI has passed the
+interactive Windows-terminal smoke/performance measurements.
