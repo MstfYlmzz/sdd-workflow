@@ -6,6 +6,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot 'lib/common.ps1')
 . (Join-Path $repoRoot 'lib/ledger.ps1')
 . (Join-Path $repoRoot 'lib/spectatui.ps1')
+. (Join-Path $repoRoot 'lib/events.ps1')
 . (Join-Path $repoRoot 'lib/stages.ps1')
 . (Join-Path $repoRoot 'lib/tier0.ps1')
 
@@ -126,6 +127,16 @@ try {
     $finalAgentDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
     Assert-True (@($finalAgentDoc.events | Where-Object event_type -eq 'agent_message_live').Count -eq 0) 'Final agent mesajı canlı partial kaydını temizlemeli.'
     Assert-True (@($finalAgentDoc.events | Where-Object { $_.event_type -eq 'agent_message' -and $_.message -eq 'Hello world' }).Count -eq 1) 'Parsed Agent Output final mesajı korumalı.'
+
+    $secretEvent = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:09+03:00';run_id='run-1';sequence=33;stage='implement'
+        category='assistant';event_type='agent_message';severity='info';status='completed'
+        message='api_key=super-secret value';provider='codex';exit_code=$null;duration_ms=$null
+    }
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $secretEvent
+    $secretDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
+    $secretLine = @($secretDoc.events | Where-Object sequence -eq 33)[0].message
+    Assert-True ($secretLine -match 'api_key=<redacted>' -and $secretLine -notmatch 'super-secret') 'SpectaTUI event projection obvious credentials redakte etmeli.'
 
     $ledger.stages.implement.status = 'completed'
     $ledger.stages.converge.status = 'running'
