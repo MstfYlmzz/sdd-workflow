@@ -314,7 +314,11 @@ makes SpectaTUI the operational control surface.
 When an SDD projection is active, the Overview dashboard is split into distinct
 responsibilities:
 
-- **Workflow** — lifecycle/stage progression.
+- **Workflow** — lifecycle/stage progression. When a matching
+  `sdd-status.json` exists, its SDD stage/status overrides SpectaTUI's
+  artifact-based inference; artifact inference is fallback only. An interrupted
+  implement therefore remains `impl · interrupted` even if `tasks.md`
+  checkboxes have not yet advanced.
 - **SDD Runtime** — embedded orchestration events: batch, retry, validation,
   gate, Converge and stop state.
 - **SDD Agent** — parsed provider output from the SDD event bus: assistant
