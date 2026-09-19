@@ -14,3 +14,7 @@ workflows/runs/
 # Python bytecode created when Spec Kit loads project-local workflow steps.
 __pycache__/
 *.py[cod]
+
+# Read-only SDD observability projection consumed by SpectaTUI.
+sdd-status.json
+sdd-status.json.tmp
