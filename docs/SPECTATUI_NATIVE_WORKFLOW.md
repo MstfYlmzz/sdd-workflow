@@ -344,8 +344,9 @@ reimplementing domain semantics in Rust:
 - `r` — run only the selected stage using the normal
   `sdd spec|plan|tasks|analyze|implement|converge -Ui raw` path.
 - `e` / Enter — edit the selected stage routing.
-- route editor: Tab changes field, arrows cycle agent/effort, model is editable
-  text, Ctrl+S saves, Esc cancels.
+- route editor: ↑/↓ moves between Agent, Model and Effort; ←/→ selects the
+  current field value; Model is chosen from the provider-specific model catalog
+  rather than typed free-form; Ctrl+S saves and Esc cancels.
 
 The routing editor calls a machine-facing SDD config API:
 
