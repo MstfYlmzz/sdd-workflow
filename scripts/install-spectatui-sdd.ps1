@@ -63,6 +63,8 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI core SDD projection testi başarısız.' }
             & cargo test -p spectatui-core sdd_control_actions_build_expected_commands
             if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI SDD control action testi başarısız.' }
+            & cargo test -p spectatui sdd_projection_stage_mapping_overrides_artifact_inference
+            if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI SDD stage override testi başarısız.' }
             & cargo check -p spectatui
             if ($LASTEXITCODE -ne 0) { throw 'Patched SpectaTUI compile kontrolü başarısız.' }
         } finally {
