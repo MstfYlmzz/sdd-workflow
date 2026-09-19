@@ -603,6 +603,11 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
                                     model: app.sdd_edit_model.clone(),
                                     effort: app.sdd_edit_effort.clone(),
                                 };
+                                // Update the control table immediately; the backend
+                                // command persists config.yaml and the normal CLI-job
+                                // refresh replaces this optimistic state with the
+                                // projection from disk when it completes.
+                                app.apply_sdd_route_edit_local();
                                 let (job, rx) = cli_client.spawn_job(&action);
                                 app.cli_job = Some(job);
                                 app.cli_rx = Some(rx);
