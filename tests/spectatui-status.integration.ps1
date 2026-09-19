@@ -32,6 +32,23 @@ try {
     )
     Write-Ledger -Ledger $ledger -StatePath $statePath
 
+    $ledger.stages.spec.status = 'completed'
+    $ledger.stages.plan.status = 'completed'
+    $ledger.stages.tasks.status = 'completed'
+    $ledger.stages.analyze.status = 'completed'
+    $ledger.stages.implement.status = 'not_started'
+    Assert-True ((Get-SddSpectaStage -Ledger $ledger) -eq 'implement') 'Analyze tamamlandıktan sonra implement not_started ise projection implement stage göstermeli.'
+    $ledger.stages.implement.status = 'interrupted'
+    Assert-True ((Get-SddSpectaStage -Ledger $ledger) -eq 'implement') 'Interrupted implement task aşamasına geri düşmemeli.'
+    $ledger.stages.implement.status = 'completed'
+    $ledger.stages.converge.status = 'not_started'
+    $ledger.stages.converge.round = 0
+    Assert-True ((Get-SddSpectaStage -Ledger $ledger) -eq 'implement') 'Converge başlamadan implement completed görünümü korunmalı.'
+    $ledger.stages.converge.status = 'running'
+    Assert-True ((Get-SddSpectaStage -Ledger $ledger) -eq 'converge') 'Converge başladığında projection converge stage göstermeli.'
+    $ledger.stages.converge.status = 'not_started'
+    $ledger.stages.implement.status = 'running'
+
     $profile = [pscustomobject]@{agent='codex';model='gpt-test';effort='high'}
     $args1 = @{
         ProjectRoot = $fixture
