@@ -235,3 +235,95 @@ Gerçek CLI kabul testi bilinçli olarak kullanıcı ortamına bırakılır: ilg
 sağlayıcının kurulu ve oturumunun açık olması, model adlarının hesapta mevcut
 olması gerekir. `sdd config` menüsü kurulum durumunu gösterir; Cursor mevcutsa
 `agent --list-models` sonucunu da model önerilerine ekler.
+
+
+---
+
+## SpectaTUI experimental workflow
+
+The current PowerShell CLI/TUI remains the supported fallback:
+
+~~~text
+sdd ...
+sdd tui
+~~~
+
+The experimental path keeps the same SDD domain engine but lets the Spec Kit
+workflow engine own pipeline run/resume/status and lets SpectaTUI launch it.
+
+### Setup
+
+Use Spec Kit 1.0.6 or later, then update managed project assets:
+
+~~~powershell
+sdd upgrade
+~~~
+
+This installs:
+
+- .specify/workflows/sdd-native/workflow.yml
+- .specify/workflows/steps/sdd-process/
+- the sdd-native workflow registry entry
+
+The project must already have an active feature with committed spec.md, plan.md
+and tasks.md and a clean worktree.
+
+### Run from SpectaTUI
+
+Open **Automation Workflows**, select **SDD Native Closure**, then:
+
+- r — run
+- R — resume last run
+- s — workflow status/history
+
+Phase A runs:
+
+~~~text
+tasks-ready
+→ analyze
+→ autonomous-closure
+    → existing implement loop
+    → Tier 0 / Tier 1
+    → final strict Tier 1
+    → existing LLM-based Converge
+    → convergence tasks? implement again
+    → clean convergence
+~~~
+
+Agent/model/effort are **not** stored in the workflow YAML. They continue to
+come from .sdd/config.yaml, so Codex/Claude/Cursor routing stays identical to the
+legacy path.
+
+### State ownership
+
+- .specify/workflows/runs/<run-id>/... = pipeline execution position and
+  run/resume/status state.
+- .sdd/state.json = authoritative SDD domain state: tasks, attempts, sessions,
+  validation, routing metadata and convergence.
+
+Spec Kit run state is machine-local and Git-ignored; it is never a second task
+ledger.
+
+### Live output
+
+A small project-local Spec Kit step named sdd-process is used because the stock
+Spec Kit shell step buffers child output. sdd-process forwards the existing SDD
+raw event stream live to the parent Specify process; SpectaTUI already streams
+that process into its CLI output popup.
+
+Phase A does **not** fork or patch SpectaTUI. Rich parsing of SDD events and an
+explicit Converge badge in the main SpectaTUI dashboard are Phase B work.
+
+### Resume and convergence
+
+Spec Kit resumes only the top-level pipeline step. Exact task/session retry
+semantics remain inside .sdd/state.json and the existing implement loop.
+Observation pause maps to a native workflow PAUSED result. Converge remains the
+normal LLM-based speckit-converge skill with the existing deterministic
+append-only/write-boundary checks.
+
+For the full semantics matrix, architecture decision, test coverage, and known
+limitations see docs/SPECTATUI_NATIVE_WORKFLOW.md.
+
+The old PowerShell TUI must not be removed until Phase B observability and real
+terminal performance measurements are complete.
