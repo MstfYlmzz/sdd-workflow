@@ -127,6 +127,11 @@ ui:
 
     $domain = Read-Ledger -StatePath $statePath
     Assert-True ($domain.stages.implement.status -eq 'completed') '.sdd/state.json domain closure sonucunu authoritative tutmalı.'
+    $projectionPath = Join-Path $project '.specify/sdd-status.json'
+    Assert-True (Test-Path -LiteralPath $projectionPath) 'Gerçek workflow çalışması SpectaTUI projection üretmeli.'
+    $projection = Get-Content -LiteralPath $projectionPath -Raw | ConvertFrom-Json
+    Assert-True (-not [bool]$projection.authoritative) 'Projection authoritative olmamalı.'
+    Assert-True ($projection.stage -eq 'implement' -and $projection.status -eq 'completed') 'Projection completed implement ledger durumunu yansıtmalı.'
     $runState = Join-Path $project ".specify/workflows/runs/$($first.payload.run_id)/state.json"
     Assert-True (Test-Path -LiteralPath $runState) 'Spec Kit ayrı pipeline run state tutmalı.'
     Assert-True (@(git -C $project status --porcelain).Count -eq 0) 'Spec Kit run state git worktreeyi kirletmemeli.'
