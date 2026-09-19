@@ -37,6 +37,10 @@ try {
 
     $overlayFiles = @(
         'crates/spectatui-core/src/speckit/mod.rs',
+        'crates/spectatui/src/config.rs',
+        'crates/spectatui/src/main.rs',
+        'crates/spectatui/src/ui/mod.rs',
+        'crates/spectatui/src/ui/sdd_runtime.rs',
         'crates/spectatui/src/ui/workflow.rs',
         'crates/spectatui/src/ui/workflows.rs'
     )
@@ -50,7 +54,7 @@ try {
     if (-not $SkipTests) {
         Push-Location $SourceDir
         try {
-            & cargo test -p spectatui-core discover_loads_sdd_status_projection
+            & cargo test -p spectatui-core discover_loads_sdd
             if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI core SDD projection testi başarısız.' }
             & cargo check -p spectatui
             if ($LASTEXITCODE -ne 0) { throw 'Patched SpectaTUI compile kontrolü başarısız.' }
