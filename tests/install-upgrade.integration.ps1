@@ -13,7 +13,7 @@ try{
   $project=Join-Path $fixture 'project';New-Item $project -ItemType Directory|Out-Null
   $init=Initialize-SddProject -ProjectRoot $project
   Push-Location $project
-  try{$statusOutput=& (Join-Path $shim 'sdd.ps1') status 2>&1}finally{Pop-Location}
+  try{$statusOutput=& (Join-Path $shim 'sdd.ps1') status 2>&1 6>&1}finally{Pop-Location}
   Assert-True (($statusOutput-join"`n")-match'SDD durumu') 'Global shim geçerli komutu dispatcher ve proje yolu çözümünden geçirmeli.'
   Assert-True (Test-Path (Join-Path $project '.agents/skills/speckit-implement/SKILL.md')) 'sdd init agent skill assetlerini kurmalı.'
   Assert-True (Test-Path (Join-Path $project '.specify/scripts/powershell/common.ps1')) 'sdd init Spec Kit scriptlerini kurmalı.'
