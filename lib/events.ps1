@@ -62,6 +62,9 @@ function Initialize-SddEventContext {
     if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
         $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $ProjectRoot -Stage $Stage -Status 'running'
     }
+    if (Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaConfig -ProjectRoot $ProjectRoot
+    }
     Send-SddEvent -Message 'run başladı' -Category 'workflow' -EventType 'run_started' -Stage $Stage -Status 'running'
     return [pscustomobject]$script:SddEventContext
 }
