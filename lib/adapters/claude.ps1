@@ -40,7 +40,7 @@ function Read-ClaudeEvent {
     if ([string]::IsNullOrWhiteSpace($Line)) { return }
     $evt = $null
     try { $evt = $Line | ConvertFrom-Json -ErrorAction Stop } catch { }
-    if ($null -eq $evt) { Write-SddLog -Message $Line -LogPath $LogPath -Level 'stream'; return }
+    if ($null -eq $evt) { Send-SddEvent -Message $Line -LogPath $LogPath -Level 'stream' -Category 'command_output' -EventType 'provider_raw' -Source 'provider' -Provider 'claude'; return }
 
     if ($evt.PSObject.Properties.Name -contains 'session_id' -and $evt.session_id) {
         $Result.session_id = [string]$evt.session_id
@@ -48,19 +48,41 @@ function Read-ClaudeEvent {
     switch ([string]$evt.type) {
         'system' {
             if ($evt.PSObject.Properties.Name -contains 'subtype' -and $evt.subtype -eq 'init' -and $Result.session_id) {
-                Write-SddLog -Message "session: $($Result.session_id)" -LogPath $LogPath -Level 'info'
+                Send-SddEvent -Message 'Claude session başladı' -LogPath $LogPath -Category 'workflow' -EventType 'session_started' -Source 'provider' -Provider 'claude' -Metadata @{resume_available=$true}
             }
         }
         'assistant' {
             $content = if ($evt.PSObject.Properties.Name -contains 'message' -and $evt.message) { $evt.message.content } else { $evt.content }
             foreach ($part in @(ConvertTo-ClaudeTextParts -Content $content)) {
-                $MessageParts.Add($part); Write-SddLog -Message $part -LogPath $LogPath -Level 'stream'
+                $MessageParts.Add($part); Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'claude'
+            }
+            foreach ($block in @($content)) {
+                if ($null -eq $block -or $block -is [string] -or -not ($block.PSObject.Properties.Name -contains 'type')) { continue }
+                if ($block.type -eq 'tool_use') {
+                    Send-SddEvent -Message ([string]$block.name) -LogPath $LogPath -Category 'tool' -EventType 'tool_use' -Source 'provider' -Provider 'claude' -Status 'started'
+                } elseif ($block.type -in @('thinking','reasoning') -and $block.PSObject.Properties.Name -contains 'thinking') {
+                    Send-SddEvent -Message ([string]$block.thinking) -LogPath $LogPath -Category 'reasoning_summary' -EventType 'reasoning' -Source 'provider' -Provider 'claude'
+                }
+            }
+        }
+        'stream_event' {
+            $event = if ($evt.PSObject.Properties.Name -contains 'event') { $evt.event } else { $null }
+            $delta = if ($event -and $event.PSObject.Properties.Name -contains 'delta') { $event.delta } else { $null }
+            if ($delta -and
+                $delta.PSObject.Properties.Name -contains 'type' -and
+                $delta.type -eq 'text_delta' -and
+                $delta.PSObject.Properties.Name -contains 'text') {
+                Send-SddEvent -Message ([string]$delta.text) -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message_partial' -Source 'provider' -Provider 'claude'
             }
         }
         'result' {
             $Result._completed = $true
             if ($evt.PSObject.Properties.Name -contains 'result' -and $evt.result) {
                 $Result.last_message = [string]$evt.result
+            }
+            if ($evt.PSObject.Properties.Name -contains 'usage') {
+                $Result.usage = $evt.usage
+                Send-SddEvent -Message 'Claude usage alındı' -LogPath $LogPath -Category 'usage' -EventType 'usage' -Source 'provider' -Provider 'claude' -Usage $evt.usage
             }
             $permissionDenials = if ($evt.PSObject.Properties.Name -contains 'permission_denials') { @($evt.permission_denials) } else { @() }
             foreach ($denial in $permissionDenials) {
@@ -73,7 +95,7 @@ function Read-ClaudeEvent {
         }
         'error' {
             $msg = if ($evt.PSObject.Properties.Name -contains 'message') { [string]$evt.message } else { $Line }
-            $Result.denied.Add($msg); Write-SddLog -Message "HATA: $msg" -LogPath $LogPath -Level 'error'
+            $Result.denied.Add($msg); Send-SddEvent -Message $msg -LogPath $LogPath -Level 'error' -Category 'error' -EventType 'provider_error' -Source 'provider' -Provider 'claude'
         }
     }
 }
@@ -85,6 +107,7 @@ function Invoke-ClaudeAgent {
     $args.Add('-p')
     $args.Add('--output-format'); $args.Add('stream-json')
     $args.Add('--verbose')
+    if ($Request.ContainsKey('stream_partial') -and $Request.stream_partial) { $args.Add('--include-partial-messages') }
     $args.Add('--permission-mode'); $args.Add('bypassPermissions')
     if ($Request.model) { $args.Add('--model'); $args.Add([string]$Request.model) }
     $args.Add('--effort'); $args.Add((Convert-EffortToClaude -Effort ([string]$Request.effort) -Model ([string]$Request.model)))
@@ -100,7 +123,7 @@ function Invoke-ClaudeAgent {
     $result = [ordered]@{
         ok = $false; session_id = $null
         denied = [System.Collections.Generic.List[string]]::new()
-        last_message = $null; log_path = $Request.log_path; _completed = $false
+        last_message = $null; log_path = $Request.log_path; usage = $null; _completed = $false
     }
     $parts = [System.Collections.Generic.List[string]]::new()
     $exitCode = -1
@@ -112,7 +135,7 @@ function Invoke-ClaudeAgent {
         $exitCode = $LASTEXITCODE
     } catch {
         $result.denied.Add($_.Exception.Message)
-        Write-SddLog -Message $_.Exception.Message -LogPath $Request.log_path -Level 'error'
+        Send-SddEvent -Message $_.Exception.Message -LogPath $Request.log_path -Level 'error' -Category 'error' -EventType 'adapter_error' -Source 'adapter' -Provider 'claude'
     } finally { Pop-Location }
 
     if ($exitCode -ne 0) { $result.denied.Add("Claude CLI exit code: $exitCode") }

@@ -6,14 +6,36 @@
 
 Set-StrictMode -Version Latest
 
-$script:StageOrder = @('spec','plan','tasks','analyze','implement')
+$script:StageOrder = @('spec','plan','tasks','analyze','implement','converge')
+
+function Update-LedgerShape {
+    <# Eski state.json dosyalarını geriye uyumlu biçimde bellekte genişletir. #>
+    param([Parameter(Mandatory)] [object] $Ledger)
+    if (-not ($Ledger.PSObject.Properties.Name -contains 'stages') -or $null -eq $Ledger.stages) {
+        $Ledger | Add-Member -NotePropertyName stages -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    foreach ($name in $script:StageOrder) {
+        if (-not ($Ledger.stages.PSObject.Properties.Name -contains $name)) {
+            $value = if ($name -eq 'converge') { [pscustomobject]@{status='not_started';round=0} } else { [pscustomobject]@{status='not_started'} }
+            $Ledger.stages | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force
+        }
+    }
+    if (-not ($Ledger.PSObject.Properties.Name -contains 'gate_baseline')) {
+        $Ledger | Add-Member -NotePropertyName gate_baseline -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if (-not ($Ledger.PSObject.Properties.Name -contains 'tasks')) {
+        $Ledger | Add-Member -NotePropertyName tasks -NotePropertyValue @() -Force
+    }
+    return $Ledger
+}
 
 function Read-Ledger {
     param([Parameter(Mandatory)] [string] $StatePath)
     if (-not (Test-Path -LiteralPath $StatePath)) {
         throw "state.json bulunamadı: $StatePath. Önce 'sdd init' çalıştır."
     }
-    Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    $ledger = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    return (Update-LedgerShape -Ledger $ledger)
 }
 
 function Write-Ledger {
@@ -25,9 +47,28 @@ function Write-Ledger {
         [Parameter(Mandatory)] [object] $Ledger,
         [Parameter(Mandatory)] [string] $StatePath
     )
+    $Ledger = Update-LedgerShape -Ledger $Ledger
     $tmp = "$StatePath.tmp"
     $Ledger | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $tmp -Encoding utf8
     Move-Item -LiteralPath $tmp -Destination $StatePath -Force
+}
+
+function Get-SddActiveSpecId {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    $path=Join-Path $ProjectRoot '.specify/feature.json'
+    if(-not(Test-Path -LiteralPath $path)){return $null}
+    try{$feature=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json;$dir=([string]$feature.feature_directory).TrimEnd('/','\');if($dir){return (Split-Path -Leaf $dir)}}catch{}
+    return $null
+}
+
+function Get-SddSpecCatalog {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    $active=Get-SddActiveSpecId -ProjectRoot $ProjectRoot
+    foreach($dir in @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'specs') -Directory -ErrorAction SilentlyContinue|Sort-Object Name)){
+        $total=0;$done=0;$taskFile=Join-Path $dir.FullName 'tasks.md'
+        if(Test-Path -LiteralPath $taskFile){$lines=@(Get-Content -LiteralPath $taskFile);$total=@($lines|Where-Object{$_-match'^\s*-\s*\[[ xX]\]\s*T\d+'}).Count;$done=@($lines|Where-Object{$_-match'^\s*-\s*\[[xX]\]\s*T\d+'}).Count}
+        [pscustomobject]@{id=$dir.Name;active=($dir.Name-eq$active);tasks=$total;done=$done;path=$dir.FullName}
+    }
 }
 
 function Get-LedgerTasks {
@@ -337,6 +378,10 @@ function Show-LedgerStatus {
             }
             Write-Host ("  {0,-10} {1}" -f $name, $st.status) -ForegroundColor $color
         }
+    }
+
+    if ($ledger.stages.converge.PSObject.Properties.Name -contains 'round') {
+        Write-Host ("  {0,-10} {1}" -f 'conv.round', $ledger.stages.converge.round) -ForegroundColor DarkGray
     }
 
     $tasks = @(Get-LedgerTasks $ledger)

@@ -34,9 +34,21 @@ try {
     $resume = [array]::IndexOf($seen, '--resume')
     Assert-True ($resume -ge 0 -and $seen[$resume + 1] -eq 'old-chat') 'Cursor resume chat id aktarılmalı.'
     Assert-True ((Convert-EffortToCursor -Effort high -Model auto) -eq 'auto') 'Cursor effort model adını uydurmamalı.'
+
+    $events=[Collections.Generic.List[object]]::new()
+    function global:Send-SddEvent { param($Message,$EventType,$Category,$Provider,$LogPath,$Level,$Source) $events.Add([pscustomobject]@{message=$Message;event_type=$EventType}) }
+    $stream=[ordered]@{session_id=$null;denied=[Collections.Generic.List[string]]::new();last_message=$null;usage=$null;_completed=$false;_stream_partial=$true}
+    $parts=[Collections.Generic.List[string]]::new()
+    Read-CursorEvent '{"type":"assistant","timestamp_ms":1,"message":{"content":[{"type":"text","text":"Planning the "}]}}' $stream $parts ''
+    Read-CursorEvent '{"type":"assistant","timestamp_ms":2,"message":{"content":[{"type":"text","text":"implementation"}]}}' $stream $parts ''
+    Read-CursorEvent '{"type":"assistant","timestamp_ms":3,"model_call_id":"duplicate","message":{"content":[{"type":"text","text":"Planning the implementation"}]}}' $stream $parts ''
+    Read-CursorEvent '{"type":"assistant","message":{"content":[{"type":"text","text":"Planning the implementation"}]}}' $stream $parts ''
+    Assert-True (($events.message-join'')-eq'Planning the implementation'-and$events.Count-eq2) 'Yalnız gerçek Cursor deltaları yayınlanmalı; flush tekrarları atlanmalı.'
+    Assert-True ($stream.last_message-eq'Planning the implementation') 'Cursor deltaları boşluksuz birleştirilmeli.'
     Write-Host 'CURSOR ADAPTER INTEGRATION OK' -ForegroundColor Green
 } finally {
     Remove-Item Function:\global:agent -ErrorAction SilentlyContinue
+    Remove-Item Function:\global:Send-SddEvent -ErrorAction SilentlyContinue
     Remove-Variable -Scope global -Name CURSOR_MOCK_CAPTURE -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
 }

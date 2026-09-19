@@ -6,9 +6,9 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $parseErrors = [System.Collections.Generic.List[object]]::new()
 Get-ChildItem -LiteralPath $repoRoot -Recurse -Filter '*.ps1' | ForEach-Object {
     $tokens = $null
-    $errors = $null
-    [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
-    foreach ($error in @($errors)) { $parseErrors.Add($error) }
+    $parseIssues = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseIssues)
+    foreach ($parseIssue in @($parseIssues)) { $parseErrors.Add($parseIssue) }
 }
 if ($parseErrors.Count -gt 0) { $parseErrors | Format-List; throw 'PowerShell parse kontrolü başarısız.' }
 Write-Host 'PARSE OK' -ForegroundColor Green
@@ -18,7 +18,11 @@ $tests = @(
     'codex-adapter.integration.ps1',
     'claude-adapter.integration.ps1',
     'cursor-adapter.integration.ps1',
+    'events-tui.integration.ps1',
+    'install-upgrade.integration.ps1',
+    'agent-selection.integration.ps1',
     'analyze.integration.ps1',
+    'converge.integration.ps1',
     'loop.integration.ps1',
     'retry.integration.ps1',
     'revalidate.integration.ps1',

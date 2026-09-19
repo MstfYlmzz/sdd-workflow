@@ -36,6 +36,7 @@ function Get-SddPaths {
         SddDir    = $sdd
         Config    = Join-Path $sdd 'config.yaml'
         State     = Join-Path $sdd 'state.json'
+        Runs      = Join-Path $sdd 'runs.jsonl'
         SpecsDir  = Join-Path $sdd 'specs'
         LogsDir   = Join-Path $sdd 'logs'
     }
@@ -189,6 +190,17 @@ function Write-SddLog {
         [ValidateSet('info','warn','error','stream')] [string] $Level = 'info'
     )
 
+    # events.ps1 yüklüyse tek yazıcı event bus'tır. Guard, event bus'ın dosya
+    # yazarken tekrar kendisine dönmesini engeller.
+    $sinkEnabled = Get-Variable -Scope Script -Name SddEventSinkEnabled -ValueOnly -ErrorAction SilentlyContinue
+    $inEvent = Get-Variable -Scope Script -Name InSddEvent -ValueOnly -ErrorAction SilentlyContinue
+    if ($sinkEnabled -and -not $inEvent -and
+        (Get-Command Send-SddEvent -ErrorAction SilentlyContinue)) {
+        $category = if ($Level -eq 'stream') { 'command_output' } elseif ($Level -eq 'error') { 'error' } else { 'workflow' }
+        Send-SddEvent -Message $Message -LogPath $LogPath -Level $Level -Category $category -EventType 'log'
+        return
+    }
+
     $stamp = (Get-Date).ToString('HH:mm:ss')
     $prefix = switch ($Level) {
         'warn'   { '[!]' }
@@ -208,6 +220,120 @@ function Write-SddLog {
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         Add-Content -LiteralPath $LogPath -Value $line
     }
+}
+
+# Adapter testleri events.ps1'i ayrıca yüklemese de aynı çağrı sözleşmesini
+# kullanabilsin. events.ps1 dot-source edildiğinde bu fallback'i override eder.
+if (-not (Get-Command Send-SddEvent -ErrorAction SilentlyContinue)) {
+    function Send-SddEvent {
+        param(
+            [AllowEmptyString()] [string] $Message = '', [string] $LogPath,
+            [ValidateSet('info','warn','error','stream')] [string] $Level = 'info',
+            [string] $Category = 'workflow', [string] $EventType = 'message',
+            [string] $Source = 'orchestrator', [string] $Provider = '', [string] $Stage = '',
+            [string] $Status = '', [string] $Command = '', [Nullable[int]] $ExitCode,
+            [Nullable[long]] $DurationMs, [object] $Usage, [hashtable] $Metadata
+        )
+        Write-SddLog -Message $(if ($Command) { $Command } else { $Message }) -LogPath $LogPath -Level $Level
+    }
+}
+
+if (-not (Get-Command Test-SddPartialStreaming -ErrorAction SilentlyContinue)) {
+    function Test-SddPartialStreaming { return $false }
+}
+
+function Get-SddInstallationRoot {
+    return (Split-Path -Parent $PSScriptRoot)
+}
+
+function Get-SddWorkflowVersion {
+    param([string] $InstallationRoot = (Get-SddInstallationRoot))
+    try {
+        $sha = (& git -C $InstallationRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -eq 0 -and $sha) { return ([string]$sha).Trim() }
+    } catch { }
+    return 'working-tree'
+}
+
+function Get-SddManagedAssets {
+    param([string] $InstallationRoot = (Get-SddInstallationRoot))
+    $manifestPath=Join-Path $InstallationRoot 'templates/assets.manifest.json'
+    if(-not(Test-Path -LiteralPath $manifestPath)){throw "Asset manifest bulunamadı: $manifestPath"}
+    $definition=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
+    $items=[System.Collections.Generic.List[object]]::new()
+    foreach($root in @($definition.managed_roots)){
+        $sourceRoot=Join-Path $InstallationRoot ([string]$root)
+        if(-not(Test-Path -LiteralPath $sourceRoot -PathType Container)){continue}
+        foreach($file in @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse|Sort-Object FullName)){
+            $relative=([IO.Path]::GetRelativePath($InstallationRoot,$file.FullName)-replace '\\','/')
+            $items.Add([pscustomobject]@{relative=$relative;source=$file.FullName;mode='managed';hash=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()})
+        }
+    }
+    foreach($relative in @($definition.managed_files)){
+        $source=Join-Path $InstallationRoot ([string]$relative)
+        if(Test-Path -LiteralPath $source -PathType Leaf){$items.Add([pscustomobject]@{relative=([string]$relative-replace'\\','/');source=$source;mode='managed';hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()})}
+    }
+    foreach($relative in @($definition.seed_files)){
+        $source=Join-Path $InstallationRoot ([string]$relative)
+        if(Test-Path -LiteralPath $source -PathType Leaf){$items.Add([pscustomobject]@{relative=([string]$relative-replace'\\','/');source=$source;mode='seed';hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()})}
+    }
+    return @($items|Sort-Object relative -Unique)
+}
+
+function Sync-SddProjectAssets {
+    <#
+      Merkezi kurulumdaki üretilmiş Spec Kit asset'lerini projeye taşır.
+      Managed dosyalar önceki kurulum hash'iyle eşleşiyorsa güvenle güncellenir;
+      proje tarafından değiştirilmiş dosyalar ancak -Force ile ezilir.
+      Constitution gibi seed dosyaları yalnız eksikse oluşturulur.
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [string] $InstallationRoot = (Get-SddInstallationRoot),
+        [switch] $Force,
+        [switch] $Initialize
+    )
+    $sddDir=Join-Path $ProjectRoot '.sdd';New-Item -ItemType Directory -Path $sddDir -Force|Out-Null
+    $statePath=Join-Path $sddDir 'assets.json';$previous=@{}
+    if(Test-Path -LiteralPath $statePath){
+        try{$saved=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json -AsHashtable;if($saved.files){$previous=$saved.files}}catch{throw "Asset kayıt dosyası okunamadı: $statePath"}
+    }
+    $assets=@(Get-SddManagedAssets -InstallationRoot $InstallationRoot)
+    $copy=[System.Collections.Generic.List[object]]::new();$conflicts=[System.Collections.Generic.List[string]]::new();$unchanged=0
+    foreach($asset in $assets){
+        $destination=Join-Path $ProjectRoot $asset.relative
+        if($asset.mode-eq'seed'-and(Test-Path -LiteralPath $destination)){ $unchanged++;continue }
+        if(-not(Test-Path -LiteralPath $destination)){ $copy.Add($asset);continue }
+        $current=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+        if($current-eq$asset.hash){$unchanged++;continue}
+        $known=$previous.ContainsKey($asset.relative)-and$current-eq[string]$previous[$asset.relative]
+        if($asset.mode-eq'managed'-and($Force-or$known)){ $copy.Add($asset);continue }
+        if($asset.mode-eq'managed'-and-not$Initialize){$conflicts.Add($asset.relative)}else{$unchanged++}
+    }
+    if($conflicts.Count-gt0){
+        throw "Proje tarafından değiştirilmiş managed asset bulundu; hiçbir dosya güncellenmedi. İncele veya 'sdd upgrade -Force' kullan: $($conflicts-join', ')"
+    }
+    foreach($asset in $copy){
+        $destination=Join-Path $ProjectRoot $asset.relative;$parent=Split-Path -Parent $destination
+        if(-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Path $parent -Force|Out-Null}
+        Copy-Item -LiteralPath $asset.source -Destination $destination -Force
+    }
+    $fileHashes=[ordered]@{}
+    foreach($asset in @($assets|Where-Object{$_.mode-eq'managed'})){$fileHashes[$asset.relative]=$asset.hash}
+    $record=[ordered]@{schema_version=1;workflow_version=(Get-SddWorkflowVersion -InstallationRoot $InstallationRoot);updated_at=(Get-Date).ToString('o');files=$fileHashes}
+    $tmp="$statePath.tmp";$record|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $tmp -Encoding utf8;Move-Item -LiteralPath $tmp -Destination $statePath -Force
+    [pscustomobject]@{updated=@($copy|ForEach-Object{$_.relative});conflicts=@($conflicts);unchanged=$unchanged;state_path=$statePath;workflow_version=$record.workflow_version}
+}
+
+function Update-SddInstallation {
+    param([string] $InstallationRoot = (Get-SddInstallationRoot))
+    if(-not(Test-Path -LiteralPath (Join-Path $InstallationRoot '.git'))){throw "Merkezi SDD kurulumu Git clone değil: $InstallationRoot"}
+    $dirty=@(& git -C $InstallationRoot status --porcelain)
+    if($LASTEXITCODE-ne0){throw 'SDD repo durumu okunamadı.'}
+    if($dirty.Count-gt0){throw "SDD kurulumunda commitlenmemiş değişiklik var; self-update iptal edildi: $($dirty-join' | ')"}
+    & git -C $InstallationRoot pull --ff-only
+    if($LASTEXITCODE-ne0){throw 'git pull --ff-only başarısız.'}
+    [pscustomobject]@{root=$InstallationRoot;version=(Get-SddWorkflowVersion -InstallationRoot $InstallationRoot)}
 }
 
 function Initialize-SddProject {
@@ -246,6 +372,14 @@ function Initialize-SddProject {
         if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null; $created.Add($d) }
     }
 
+    $ignorePath = Join-Path $ProjectRoot '.gitignore'
+    $ignoreLines = if (Test-Path -LiteralPath $ignorePath) { @(Get-Content -LiteralPath $ignorePath) } else { @() }
+    $missingIgnore = @('.sdd/logs/','.sdd/runs.jsonl') | Where-Object { $_ -notin $ignoreLines }
+    if ($missingIgnore.Count -gt 0) {
+        Add-Content -LiteralPath $ignorePath -Value $missingIgnore -Encoding utf8
+        $created.Add("$ignorePath  (SDD runtime ignore kuralları)")
+    } else { $skipped.Add("$ignorePath  (SDD runtime ignore kuralları)") }
+
     # config.yaml — varsa dokunma
     if (Test-Path -LiteralPath $paths.Config) {
         $skipped.Add($paths.Config)
@@ -269,6 +403,7 @@ function Initialize-SddProject {
                 tasks     = @{ status = 'not_started' }
                 analyze   = @{ status = 'not_started' }
                 implement = @{ status = 'not_started' }
+                converge  = @{ status = 'not_started'; round = 0 }
             }
             gate_baseline    = [ordered]@{}
             tasks            = @()
@@ -277,5 +412,7 @@ function Initialize-SddProject {
         $created.Add($paths.State)
     }
 
-    [pscustomobject]@{ Created = $created; Skipped = $skipped; Paths = $paths }
+    $assets=Sync-SddProjectAssets -ProjectRoot $ProjectRoot -InstallationRoot (Split-Path -Parent $TemplatesDir) -Initialize
+    foreach($item in $assets.updated){$created.Add((Join-Path $ProjectRoot $item))}
+    [pscustomobject]@{ Created = $created; Skipped = $skipped; Paths = $paths; Assets=$assets }
 }
