@@ -49,6 +49,67 @@ function Get-SddSpectaStage {
     return 'spec'
 }
 
+function Get-SddSpectaEventsPath {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    return (Join-Path $ProjectRoot '.specify/sdd-events.json')
+}
+
+function Write-SddSpectaEvent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [object] $Event,
+        [int] $MaxEvents = 40
+    )
+
+    $specifyDir = Join-Path $ProjectRoot '.specify'
+    if (-not (Test-Path -LiteralPath $specifyDir -PathType Container)) { return $null }
+
+    $category = [string](Get-SddSpectaProperty -Object $Event -Name 'category' -Default '')
+    $eventType = [string](Get-SddSpectaProperty -Object $Event -Name 'event_type' -Default '')
+    if ($category -eq 'command_output' -or $eventType -eq 'agent_message_partial') { return $null }
+
+    $path = Get-SddSpectaEventsPath -ProjectRoot $ProjectRoot
+    $existingEvents = @()
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try {
+            $existing = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+            $existingEvents = @((Get-SddSpectaProperty -Object $existing -Name 'events' -Default @()))
+        } catch {
+            $existingEvents = @()
+        }
+    }
+
+    $entry = [ordered]@{
+        timestamp   = [string](Get-SddSpectaProperty -Object $Event -Name 'timestamp' -Default ((Get-Date).ToString('o')))
+        run_id      = [string](Get-SddSpectaProperty -Object $Event -Name 'run_id' -Default '')
+        sequence    = [int](Get-SddSpectaProperty -Object $Event -Name 'sequence' -Default 0)
+        stage       = [string](Get-SddSpectaProperty -Object $Event -Name 'stage' -Default '')
+        category    = $category
+        event_type  = $eventType
+        severity    = [string](Get-SddSpectaProperty -Object $Event -Name 'severity' -Default 'info')
+        status      = [string](Get-SddSpectaProperty -Object $Event -Name 'status' -Default '')
+        message     = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
+        provider    = [string](Get-SddSpectaProperty -Object $Event -Name 'provider' -Default '')
+        exit_code   = Get-SddSpectaProperty -Object $Event -Name 'exit_code' -Default $null
+        duration_ms = Get-SddSpectaProperty -Object $Event -Name 'duration_ms' -Default $null
+    }
+
+    $limit = [Math]::Max(5, $MaxEvents)
+    $events = @($existingEvents + [pscustomobject]$entry | Select-Object -Last $limit)
+    $doc = [ordered]@{
+        schema_version = 1
+        authoritative = $false
+        updated_at = (Get-Date).ToUniversalTime().ToString('o')
+        events = $events
+    }
+
+    $tmp = "$path.tmp"
+    $doc | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding utf8 -NoNewline
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+    return [pscustomobject]$entry
+}
+
 function Write-SddSpectaStatus {
     [CmdletBinding()]
     param(
