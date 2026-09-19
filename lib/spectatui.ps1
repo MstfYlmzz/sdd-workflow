@@ -49,6 +49,53 @@ function Get-SddSpectaStage {
     return 'spec'
 }
 
+function Get-SddSpectaConfigPath {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    return (Join-Path $ProjectRoot '.specify/sdd-config.json')
+}
+
+function Get-SddSpectaConfigDocument {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+
+    $configPath = Join-Path $ProjectRoot '.sdd/config.yaml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
+    $config = Read-SddConfig -ConfigPath $configPath
+
+    $routes = foreach ($stageName in @('spec','plan','tasks','analyze','implement','converge')) {
+        $profile = Get-SddSpectaProperty -Object (Get-SddSpectaProperty -Object $config -Name 'agents') -Name $stageName
+        [pscustomobject][ordered]@{
+            stage = $stageName
+            agent = [string](Get-SddSpectaProperty -Object $profile -Name 'agent' -Default '')
+            model = [string](Get-SddSpectaProperty -Object $profile -Name 'model' -Default '')
+            effort = [string](Get-SddSpectaProperty -Object $profile -Name 'effort' -Default '')
+        }
+    }
+
+    [pscustomobject][ordered]@{
+        schema_version = 1
+        authoritative = $false
+        updated_at = (Get-Date).ToUniversalTime().ToString('o')
+        routes = @($routes)
+    }
+}
+
+function Write-SddSpectaConfig {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+
+    $specifyDir = Join-Path $ProjectRoot '.specify'
+    if (-not (Test-Path -LiteralPath $specifyDir -PathType Container)) { return $null }
+    $doc = Get-SddSpectaConfigDocument -ProjectRoot $ProjectRoot
+    if (-not $doc) { return $null }
+
+    $path = Get-SddSpectaConfigPath -ProjectRoot $ProjectRoot
+    $tmp = "$path.tmp"
+    $doc | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding utf8 -NoNewline
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+    return $doc
+}
+
 function Get-SddSpectaEventsPath {
     param([Parameter(Mandatory)] [string] $ProjectRoot)
     return (Join-Path $ProjectRoot '.specify/sdd-events.json')
