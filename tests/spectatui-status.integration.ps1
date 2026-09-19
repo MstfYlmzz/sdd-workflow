@@ -44,13 +44,19 @@ try {
         MaxAttempts = 3
         Profile = $profile
     }
+    $featureDir = Join-Path $fixture 'specs/001-status'
+    New-Item -ItemType Directory -Path $featureDir -Force | Out-Null
+    [ordered]@{ feature_directory = 'specs/001-status' } |
+        ConvertTo-Json |
+        Set-Content -LiteralPath (Join-Path $fixture '.specify/feature.json') -Encoding utf8
+
     $null = Write-SddSpectaStatus @args1
 
     $path = Join-Path $fixture '.specify/sdd-status.json'
     Assert-True (Test-Path -LiteralPath $path) 'Projection dosyası üretilmeli.'
     $doc = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     Assert-True (-not [bool]$doc.authoritative) 'Projection authoritative state olmamalı.'
-    Assert-True ($doc.spec_id -eq '001-status' -and $doc.stage -eq 'implement' -and $doc.status -eq 'running') 'Spec/stage/status doğru olmalı.'
+    Assert-True ($doc.spec_id -eq '001-status' -and $doc.stage -eq 'implement' -and $doc.status -eq 'running') 'Projection aktif Spec Kit feature kimliğini stage/status ile birlikte kullanmalı.'
     Assert-True ($doc.tasks.total -eq 3 -and $doc.tasks.done -eq 1 -and $doc.tasks.pending -eq 1 -and $doc.tasks.blocked -eq 1) 'Task sayaçları ledgerdan türetilmeli.'
     Assert-True (@($doc.runtime.batch).Count -eq 1 -and $doc.runtime.batch[0] -eq 'T002') 'Aktif batch görünmeli.'
     Assert-True ($doc.runtime.batch_number -eq 4 -and $doc.runtime.attempt -eq 2 -and $doc.runtime.max_attempts -eq 3) 'Batch/retry metadata görünmeli.'
@@ -64,6 +70,16 @@ try {
     Assert-True (@($configProjection.routes).Count -eq 6) 'Altı SDD stage routing satırı projection içinde olmalı.'
     $implementRoute = @($configProjection.routes | Where-Object stage -eq 'implement')[0]
     Assert-True ($implementRoute.agent -and $implementRoute.model -and $implementRoute.effort) 'Implement routing bilgisi eksiksiz görünmeli.'
+
+    $legacyLedger = Read-Ledger -StatePath $statePath
+    $legacyLedger.spec_id = 'legacy-project-name'
+    $tasksPath = Join-Path $featureDir 'tasks.md'
+    @(
+        '# Tasks',
+        '- [ ] T001 Example task'
+    ) | Set-Content -LiteralPath $tasksPath -Encoding utf8
+    $legacyLedger = Import-TasksToLedger -Ledger $legacyLedger -TasksMdPath $tasksPath
+    Assert-True ($legacyLedger.spec_id -eq '001-status') 'Task import eski repo-adı spec_id değerini feature klasörüyle düzeltmeli.'
 
     $null = Set-SddStageProfile -ConfigPath (Join-Path $fixture '.sdd/config.yaml') -StageName analyze -Agent claude -Model sonnet -Effort high
     $configProjection = Get-Content -LiteralPath $configProjectionPath -Raw | ConvertFrom-Json
