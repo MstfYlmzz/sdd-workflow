@@ -22,6 +22,7 @@ pub struct Project {
     pub integrations: Vec<IntegrationInfo>,
     pub workflows: Vec<WorkflowInfo>,
     pub sdd_status: Option<SddStatus>,
+    pub sdd_events: Vec<SddEventSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +84,40 @@ pub struct SddRuntimeStatus {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct SddEventSummary {
+    #[serde(default)]
+    pub timestamp: String,
+    #[serde(default)]
+    pub run_id: String,
+    #[serde(default)]
+    pub sequence: u64,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub event_type: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SddEventFeed {
+    #[serde(default)]
+    events: Vec<SddEventSummary>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SddStatus {
     #[serde(default)]
     pub schema_version: u32,
@@ -115,6 +150,7 @@ impl Project {
         let presets = registry::load_presets(&root)?;
         let integrations = registry::load_integrations(&root)?;
         let sdd_status = load_sdd_status(&root);
+        let sdd_events = load_sdd_events(&root);
 
         Ok(Project {
             root,
@@ -125,6 +161,7 @@ impl Project {
             integrations,
             workflows: Vec::new(),
             sdd_status,
+            sdd_events,
         })
     }
 
@@ -141,6 +178,16 @@ fn load_sdd_status(root: &Path) -> Option<SddStatus> {
     let path = root.join(".specify/sdd-status.json");
     let content = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+fn load_sdd_events(root: &Path) -> Vec<SddEventSummary> {
+    let path = root.join(".specify/sdd-events.json");
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<SddEventFeed>(&content)
+        .map(|feed| feed.events)
+        .unwrap_or_default()
 }
 
 fn discover_features(root: &Path) -> Result<Vec<Feature>> {
@@ -247,6 +294,25 @@ mod tests {
         assert_eq!(status.runtime.batch, vec!["T003"]);
         assert_eq!(status.runtime.convergence_round, 2);
         assert!(!status.authoritative);
+    }
+
+    #[test]
+    fn discover_loads_sdd_event_feed() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".specify")).unwrap();
+        std::fs::write(
+            tmp.path().join(".specify/sdd-events.json"),
+            r#"{"schema_version":1,"authoritative":false,"events":[{"timestamp":"2026-09-19T21:18:05+03:00","sequence":28,"stage":"implement","category":"gate","event_type":"gate_completed","severity":"info","status":"failed","message":"Tier 1/reference-frame-tests","exit_code":1}]}"#,
+        )
+        .unwrap();
+
+        let project = Project::discover(tmp.path()).unwrap();
+        assert_eq!(project.sdd_events.len(), 1);
+        let event = &project.sdd_events[0];
+        assert_eq!(event.stage, "implement");
+        assert_eq!(event.category, "gate");
+        assert_eq!(event.status, "failed");
+        assert_eq!(event.exit_code, Some(1));
     }
 
     #[test]
