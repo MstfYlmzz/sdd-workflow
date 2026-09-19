@@ -89,15 +89,23 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     }
     let event_slots = available.saturating_sub(lines.len());
     if event_slots > 0 {
+        let latest_run = app
+            .project
+            .sdd_events
+            .iter()
+            .rev()
+            .find(|event| event.event_type == "run_started" && !event.run_id.is_empty())
+            .map(|event| event.run_id.as_str());
         let recent: Vec<&SddEventSummary> = app
             .project
             .sdd_events
             .iter()
             .filter(|event| {
-                !matches!(
-                    event.category.as_str(),
-                    "assistant" | "reasoning_summary" | "tool" | "usage"
-                )
+                latest_run.map(|run| event.run_id == run).unwrap_or(true)
+                    && !matches!(
+                        event.category.as_str(),
+                        "assistant" | "reasoning_summary" | "tool" | "usage"
+                    )
             })
             .rev()
             .take(event_slots)
