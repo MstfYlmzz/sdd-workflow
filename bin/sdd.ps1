@@ -68,30 +68,39 @@ function Invoke-Sdd {
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}
       'config'{
-        if($Rest.Count-eq1-and[string]$Rest[0]-eq'--json'){
-            $doc=Get-SddSpectaConfigDocument -ProjectRoot $root
-            if(-not$doc){throw 'SDD config okunamadı.'}
-            $doc|ConvertTo-Json -Depth 8
+        if ($Rest.Count -eq 1 -and ([string]$Rest[0]) -eq '--json') {
+            $doc = Get-SddSpectaConfigDocument -ProjectRoot $root
+            if (-not $doc) { throw 'SDD config okunamadı.' }
+            $doc | ConvertTo-Json -Depth 8
             break
         }
-        if($Rest.Count-ge2-and[string]$Rest[0]-eq'set'){
-            $stage=[string]$Rest[1]
-            if($stage-notin@('spec','plan','tasks','analyze','implement','converge')){throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'}
-            $tail=@(if($Rest.Count-gt2){$Rest[2..($Rest.Count-1)]})
-            $o=Get-CommonArguments $tail
-            if($o.remaining.Count-or-not$o.agent-or-not$o.model-or-not$o.effort){throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'}
-            $null=Set-SddStageProfile -ConfigPath $paths.Config -StageName $stage -Agent ([string]$o.agent) -Model ([string]$o.model) -Effort ([string]$o.effort
-            )
-            $doc=Get-SddSpectaConfigDocument -ProjectRoot $root
-            $doc|ConvertTo-Json -Depth 8
+        if ($Rest.Count -ge 2 -and ([string]$Rest[0]) -eq 'set') {
+            $stage = [string]$Rest[1]
+            if ($stage -notin @('spec','plan','tasks','analyze','implement','converge')) {
+                throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'
+            }
+            $tail = @()
+            if ($Rest.Count -gt 2) { $tail = @($Rest[2..($Rest.Count-1)]) }
+            $o = Get-CommonArguments $tail
+            if ($o.remaining.Count -gt 0 -or
+                [string]::IsNullOrWhiteSpace([string]$o.agent) -or
+                [string]::IsNullOrWhiteSpace([string]$o.model) -or
+                [string]::IsNullOrWhiteSpace([string]$o.effort)) {
+                throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'
+            }
+            $null = Set-SddStageProfile -ConfigPath $paths.Config -StageName $stage -Agent ([string]$o.agent) -Model ([string]$o.model) -Effort ([string]$o.effort)
+            $doc = Get-SddSpectaConfigDocument -ProjectRoot $root
+            $doc | ConvertTo-Json -Depth 8
             break
         }
-        $o=Get-CommonArguments $Rest
-        if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'}
-        $stage='all'
-        if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]}
-        $cfg=Read-SddConfig $paths.Config
-        $null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only
+        $o = Get-CommonArguments $Rest
+        if ($o.remaining.Count -gt 1) { throw 'Kullanım: sdd config [stage] [-RunOnly]' }
+        $stage = 'all'
+        if ($o.remaining.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$o.remaining[0])) {
+            $stage = [string]$o.remaining[0]
+        }
+        $cfg = Read-SddConfig $paths.Config
+        $null = Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only
       }
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
       'workflow-stage'{$stage=if($Rest.Count-eq1){[string]$Rest[0]}else{''};if($stage-notin@('prepare','analyze','closure')){throw 'Kullanım: sdd workflow-stage prepare|analyze|closure'};$wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step $stage -UiMode raw;if($wr.pause){exit 75}}
