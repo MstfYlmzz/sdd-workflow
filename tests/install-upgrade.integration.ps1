@@ -7,6 +7,8 @@ $fixture=Join-Path ([IO.Path]::GetTempPath()) ("sdd-install-"+[guid]::NewGuid().
 try{
   $shim=Join-Path $fixture 'shim';& (Join-Path $repoRoot 'install.ps1') -InstallDir $shim -NoPath
   Assert-True ((Test-Path (Join-Path $shim 'sdd.cmd'))-and(Test-Path (Join-Path $shim 'sdd.ps1'))) 'Global sdd shimleri kurulmalı.'
+  $launcherError='';try{& (Join-Path $shim 'sdd.ps1') 'definitely-invalid' '-Prompt' @('first line','second line')}catch{$launcherError=$_.Exception.Message}
+  Assert-True ($launcherError-match'^Bilinmeyen SDD komutu: definitely-invalid') 'Global shim Object[] prompt aktarırken parameter binder hatası vermemeli.'
 
   $project=Join-Path $fixture 'project';New-Item $project -ItemType Directory|Out-Null
   $init=Initialize-SddProject -ProjectRoot $project
