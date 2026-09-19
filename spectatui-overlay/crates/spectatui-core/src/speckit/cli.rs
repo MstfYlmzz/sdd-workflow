@@ -398,6 +398,34 @@ pub struct SpecifyCliClient {
     project_root: PathBuf,
 }
 
+fn cli_spawn_command(action: &CliAction, cmd_line: &str) -> Option<(String, Vec<String>)> {
+    #[cfg(windows)]
+    if matches!(action, CliAction::SddStageRun { .. } | CliAction::SddConfigSet { .. }) {
+        // SDD is installed on Windows as a PowerShell/.cmd shim. Rust's
+        // Command/CreateProcess does not use PowerShell command discovery, so
+        // spawning bare sdd can fail even though Get-Command sdd works.
+        // Route SDD actions through cmd.exe so PATHEXT resolves sdd.cmd.
+        return Some((
+            "cmd.exe".to_string(),
+            vec![
+                "/D".to_string(),
+                "/S".to_string(),
+                "/C".to_string(),
+                cmd_line.to_string(),
+            ],
+        ));
+    }
+
+    let parts: Vec<&str> = cmd_line.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some((
+        parts[0].to_string(),
+        parts[1..].iter().map(|part| (*part).to_string()).collect(),
+    ))
+}
+
 impl SpecifyCliClient {
     pub fn new(project_root: PathBuf) -> Self {
         Self { project_root }
@@ -410,15 +438,15 @@ impl SpecifyCliClient {
         let cmd_line = job.command_line.clone();
         let root = self.project_root.clone();
 
+        let action_for_spawn = action.clone();
         tokio::spawn(async move {
-            let parts: Vec<&str> = cmd_line.split_whitespace().collect();
-            if parts.is_empty() {
+            let Some((program, args)) = cli_spawn_command(&action_for_spawn, &cmd_line) else {
                 let _ = tx.send(CliEvent::Completed { success: false });
                 return;
-            }
+            };
 
-            let spawned = Command::new(parts[0])
-                .args(&parts[1..])
+            let spawned = Command::new(&program)
+                .args(&args)
                 .current_dir(&root)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -476,6 +504,30 @@ impl SpecifyCliClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sdd_actions_use_windows_cmd_shim_when_needed() {
+        let action = CliAction::SddConfigSet {
+            stage: "implement".to_string(),
+            agent: "codex".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            effort: "high".to_string(),
+        };
+        let line = action.to_command_line();
+        let (program, args) = cli_spawn_command(&action, &line).expect("spawn command");
+
+        #[cfg(windows)]
+        {
+            assert_eq!(program, "cmd.exe");
+            assert_eq!(args, vec!["/D", "/S", "/C", line.as_str()]);
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(program, "sdd");
+            assert_eq!(args[0], "config");
+        }
+    }
 
     #[test]
     fn sdd_control_actions_build_expected_commands() {
