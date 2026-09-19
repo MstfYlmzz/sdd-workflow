@@ -354,7 +354,11 @@ function Sync-SddSpectaStatusFromDisk {
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return $null }
     try {
         $ledger = Read-Ledger -StatePath $statePath
-        return Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $ledger -Stage $Stage -Status $Status
+        $statusDoc = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $ledger -Stage $Stage -Status $Status
+        if (Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue) {
+            $null = Write-SddSpectaConfig -ProjectRoot $ProjectRoot
+        }
+        return $statusDoc
     } catch {
         return $null
     }
