@@ -55,7 +55,7 @@ function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
     if($Command-eq'self-update'){$x=Update-SddInstallation;Write-Host "`nSDD motoru güncel: $($x.version.Substring(0,[Math]::Min(8,$x.version.Length)))" -ForegroundColor Green;Write-Host "Sonraki komutlar yeni sürümü kullanacak.`n";return}
     if($Command-eq'init'){$x=Initialize-SddProject -ProjectRoot (Get-Location).Path;Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
-    $root=Find-ProjectRoot;$paths=Get-SddPaths $root
+    $root=Find-ProjectRoot;$paths=Get-SddPaths $root-Arguments $args
     $upgrade=Update-SddConfigCompatibility -ConfigPath $paths.Config
     if($upgrade.changed){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
     switch($Command){
@@ -66,8 +66,8 @@ function Invoke-Sdd {
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
       {$_-in@('spec','plan','tasks')}{
         $o=Get-CommonArguments $Rest;$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$profile=Get-CommandProfile $cfg $Command $o $paths.Config
-        $args='';$prompt='';$resume=$false;$a=@($o.remaining);for($i=0;$i-lt$a.Count;$i++){switch -Regex($a[$i]){'^-Prompt$'{if(++$i-ge$a.Count){throw '-Prompt için değer gerekli.'};$prompt=$a[$i];continue};'^-Resume$'{$resume=$true;continue};default{$args=(@($args,$a[$i])|Where-Object{$_})-join' '}}}
-        $res=Invoke-WithEventContext $root $Command (Get-ConfiguredUi $cfg $o.ui) {Invoke-Stage -Name $Command -ProjectRoot $root -Config $cfg -Ledger $L -Arguments $args -Prompt $prompt -Resume:$resume -ProfileOverride $profile};Write-Ledger $L $paths.State
+        $stageArgs='';$prompt='';$resume=$false;$a=@($o.remaining);for($i=0;$i-lt$a.Count;$i++){switch -Regex($a[$i]){'^-Prompt$'{if(++$i-ge$a.Count){throw '-Prompt için değer gerekli.'};$prompt=$a[$i];continue};'^-Resume$'{$resume=$true;continue};default{$stageArgs=(@($stageArgs,$a[$i])|Where-Object{$_})-join' '}}}
+        $res=Invoke-WithEventContext $root $Command (Get-ConfiguredUi $cfg $o.ui) {Invoke-Stage -Name $Command -ProjectRoot $root -Config $cfg -Ledger $L -Arguments $stageArgs -Prompt $prompt -Resume:$resume -ProfileOverride $profile};Write-Ledger $L $paths.State
         if($res.ok){Write-Host "`n[$Command] tamamlandı." -ForegroundColor Green}else{Write-Host "`n[$Command] başarısız." -ForegroundColor Red}
       }
       'analyze'{$o=Get-CommonArguments $Rest;if($o.remaining.Count){throw "Bilinmeyen analyze argümanı: $($o.remaining-join' ')"};$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$p=Get-CommandProfile $cfg 'analyze' $o $paths.Config;$res=Invoke-WithEventContext $root 'analyze' (Get-ConfiguredUi $cfg $o.ui) {Invoke-Analyze -Config $cfg -Ledger $L -ProjectRoot $root -Force -ProfileOverride $p};Write-Ledger $L $paths.State;if(-not$res.ok){Write-Host "`n[analyze] başarısız: $($res.output)" -ForegroundColor Red}elseif($res.blocked){Write-Host "`n[analyze] implement engellendi: $($res.severity)" -ForegroundColor Red}else{Write-Host "`n[analyze] geçti: $($res.severity), $($res.finding_count) bulgu" -ForegroundColor Green}}
