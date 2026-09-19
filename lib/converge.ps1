@@ -120,6 +120,9 @@ function Invoke-Converge {
     $round = $currentRound + 1
     $logPath = Join-Path $paths.LogsDir 'converge.log'
     Set-ConvergeStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $profile -Round $round
+    if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'converge' -Status 'running' -Profile $profile -ConvergenceRound $round -MaxConvergenceRounds $maxRounds -StopReason 'running'
+    }
     Send-SddEvent -Message "Converge round $round/$maxRounds başladı" -LogPath $logPath -Category 'workflow' -EventType 'converge_started' -Stage 'converge' -Status 'running'
 
     $prompt = Get-StagePrompt -ProjectRoot $ProjectRoot -StageName 'converge'
