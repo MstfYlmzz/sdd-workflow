@@ -52,8 +52,23 @@ function Get-ConfiguredUi {
 }
 function Invoke-WithEventContext {
     param([string]$ProjectRoot,[string]$Stage,[string]$UiMode,[scriptblock]$Action)
-    $null=Initialize-SddEventContext -ProjectRoot $ProjectRoot -UiMode $UiMode -Stage $Stage; $status='completed'
-    try{return & $Action}catch{$status='failed';throw}finally{$null=Close-SddEventContext -Status $status}
+    $null=Initialize-SddEventContext -ProjectRoot $ProjectRoot -UiMode $UiMode -Stage $Stage
+    $status='completed'
+    try {
+        $result = & $Action
+        $semanticResult = @($result) | Select-Object -Last 1
+        if ($null -ne $semanticResult -and
+            $semanticResult.PSObject.Properties.Name -contains 'ok' -and
+            -not [bool]$semanticResult.ok) {
+            $status='failed'
+        }
+        return $result
+    } catch {
+        $status='failed'
+        throw
+    } finally {
+        $null=Close-SddEventContext -Status $status
+    }
 }
 function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
