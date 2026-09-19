@@ -66,7 +66,12 @@ function Invoke-Sdd {
     if($upgrade.changed -and -not $machineConfigJson){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
     switch($Command){
       'upgrade'{$force=$false;if($Rest.Count-gt1-or($Rest.Count-eq1-and$Rest[0]-ne'-Force')){throw 'Kullanım: sdd upgrade [-Force]'};if($Rest.Count-eq1){$force=$true};$x=Sync-SddProjectAssets -ProjectRoot $root -Force:$force;if(Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue){$null=Write-SddSpectaConfig -ProjectRoot $root};Write-Host "`nProje SDD assetleri güncellendi: $($x.updated.Count) dosya" -ForegroundColor Green;Write-Host "Workflow: $($x.workflow_version.Substring(0,[Math]::Min(8,$x.workflow_version.Length)))";if($x.updated.Count){Write-Host 'Değişiklikleri inceleyip proje reposunda commit edin.' -ForegroundColor Yellow}}
-      'status'{Show-LedgerStatus $paths.State}
+      'status'{
+        if(Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue){
+            $null=Sync-SddSpectaStatusFromDisk -ProjectRoot $root
+        }
+        Show-LedgerStatus $paths.State
+      }
       'tui'{Show-SddDashboard $root}
       'config'{
         $firstConfigArg = if ($Rest.Count -gt 0) { [string]$Rest[0] } else { '' }
