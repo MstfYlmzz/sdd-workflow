@@ -50,7 +50,7 @@ try {
     if (-not $SkipTests) {
         Push-Location $SourceDir
         try {
-            & cargo test -p spectatui-core discover_loads_sdd_status_projection -- --exact
+            & cargo test -p spectatui-core discover_loads_sdd_status_projection
             if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI core SDD projection testi başarısız.' }
             & cargo check -p spectatui
             if ($LASTEXITCODE -ne 0) { throw 'Patched SpectaTUI compile kontrolü başarısız.' }
