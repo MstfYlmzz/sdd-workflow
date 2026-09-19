@@ -1,6 +1,6 @@
 # SpectaTUI Native Workflow Experiment
 
-Status: **Phase A / functional PoC**
+Status: **Phase B / observability PoC**
 
 Branch: **experiment/spectatui-native-workflow**
 
@@ -207,9 +207,15 @@ sdd-process:
 SpectaTUI already streams the outer Specify CLI stdout/stderr line-by-line into
 its CLI job popup, so no SpectaTUI fork is required for Phase A.
 
-SDD workflow bridge commands use raw event mode. Raw mode now enables provider
+SDD workflow bridge commands use raw event mode. Raw mode enables provider
 partial streaming so agent/tool/workflow events can travel through the same
-pipe. Rich parsing into dedicated SpectaTUI panes is Phase B.
+pipe.
+
+Phase B adds a second, deliberately non-authoritative channel for structured UI
+state: `.specify/sdd-status.json`. The SDD engine derives this projection from
+`.sdd/state.json` at event-context boundaries, loop checkpoints, active batch
+selection, revalidation and Converge start. The projection is Git-ignored and is
+never read back by the SDD engine as control state.
 
 ## Resume semantics
 
@@ -243,24 +249,77 @@ From SpectaTUI:
 
 The current PowerShell TUI remains available as the fallback path.
 
-## Phase B / known limitations
+## Phase B observability overlay
 
-Phase A intentionally does not modify SpectaTUI.
+SpectaTUI 1.1.0 does not expose a project UI-plugin surface; Spec Kit extensions
+can add workflow assets but cannot add Ratatui panes or fields. Phase B therefore
+uses a small, pinned source overlay rather than duplicating the SDD engine or
+maintaining a broad SpectaTUI fork.
 
-Still missing from stock SpectaTUI:
+The overlay is based on upstream SpectaTUI commit:
 
-- a dashboard stepper that explicitly shows the custom Converge stage
-- SDD task batch/retry/convergence-round fields in the main dashboard
-- parsed provider/model/effort/token fields from .sdd/runs.jsonl
-- a dedicated rich SDD event pane instead of raw JSON in CLI output
+    c039831190588c336abf4adba8a0d7c91c148774
+
+It changes only three upstream source files:
+
+- `spectatui-core/src/speckit/mod.rs` reads the optional
+  `.specify/sdd-status.json` projection read-only.
+- `ui/workflow.rs` adds an explicit `conv` badge and current route/batch/retry/
+  convergence round details to the selected feature workflow pane.
+- `ui/workflows.rs` adds the same SDD runtime details to the
+  **SDD Native Closure** workflow detail view.
+
+The patched binary is built and installed **side-by-side** as
+`spectatui-sdd`; stock `spectatui` is not replaced. The installer verifies
+the pinned upstream commit, runs the projection unit test, compiles the patched
+application and creates a release build.
+
+### Projection contract
+
+`.specify/sdd-status.json` currently exposes:
+
+- active spec ID
+- SDD stage and status
+- task totals: done/pending/blocked/manual
+- current batch IDs and batch number
+- current attempt / max attempts
+- agent / model / effort
+- Converge round / max rounds
+- stop reason
+
+The document includes `"authoritative": false`. If it is missing or malformed,
+patched SpectaTUI degrades to the normal stock view; SDD execution is unaffected.
+
+### Phase B user path
+
+After `sdd upgrade`, install the experimental UI once:
+
+    sdd spectatui install
+
+This requires Git and a Rust/Cargo stable toolchain because the pinned
+SpectaTUI source is compiled locally. Then open a project with:
+
+    spectatui-sdd -p .
+
+The existing `spectatui`, `sdd tui`, and all existing `sdd` CLI paths
+remain available as fallback paths.
+
+### Remaining UX gaps
+
+- token/provider usage is still available in SDD telemetry but not yet projected
+  into the rich status view
+- the CLI job popup still displays the raw streamed event lines rather than a
+  dedicated parsed SDD event pane
 - workflow input collection for starting a brand-new spec from free-form user
-  text; therefore the PoC starts from an existing tasks artifact
+  text is not implemented; the PoC starts from an existing tasks artifact
+- interactive Windows-terminal latency and idle-CPU measurements are still
+  required before the legacy PowerShell TUI can be considered removable
 
-These are observability/input UX gaps, not domain-engine gaps.
+These are UI/observability/input gaps, not domain-engine gaps.
 
 ## Tests
 
-Two levels are provided:
+Three levels are provided:
 
 - tests/spectatui-workflow.integration.ps1
   - managed asset installation
@@ -275,17 +334,27 @@ Two levels are provided:
   - real workflow resume
   - workflow status after resume
   - .specify workflow state and .sdd domain state do not conflict
+- tests/spectatui-status.integration.ps1
+  - projection remains non-authoritative
+  - task counters, active batch, retry and routing fields
+  - explicit Converge round projection
+  - projection is Git-ignored
+- separate CI overlay job
+  - pins SpectaTUI 1.1.0 source
+  - runs the SDD projection Rust unit test
+  - cargo-checks the patched TUI
+  - builds the release binary
 
 CI installs pinned Spec Kit v1.0.6 for the E2E while the normal PowerShell suite
 remains runnable without an extra Spec Kit installation.
 
 ## Performance status
 
-No numerical SpectaTUI-vs-PowerShell-TUI performance claim is made in Phase A.
-The integration removes the legacy PowerShell TUI render loop from the
-experimental execution path, but startup, keypress-to-render, refresh,
-subprocess-stream latency, and idle CPU must be measured on the actual Windows
-terminal/SpectaTUI build before the legacy UI can be considered removable.
+No numerical SpectaTUI-vs-PowerShell-TUI performance claim is made yet.
+Phase B proves the patched UI compiles and the SDD projection updates through
+tested execution paths, but startup, keypress-to-render, projection refresh,
+subprocess-stream latency and idle CPU must still be measured on the actual
+Windows terminal.
 
-This experiment therefore provides **functional evidence only**, not permission
-to delete the old TUI.
+The existing PowerShell TUI therefore remains in place until that interactive
+acceptance/performance pass is complete.
