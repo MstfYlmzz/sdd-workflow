@@ -2,7 +2,7 @@
 <# SDD workflow komut satırı giriş noktası.
    Argümanlar bilerek PowerShell parameter binder'a bırakılmaz. Global shim'den
    aktarılan çok satırlı -Prompt değeri Object[] olabilir. #>
-$supportedCommands=@('init','upgrade','self-update','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage')
+$supportedCommands=@('init','upgrade','self-update','spectatui','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage')
 $Command=if($args.Count){[string]$args[0]}else{''}
 $Rest=@(if($args.Count-gt1){$args[1..($args.Count-1)]})
 if($Command-and$Command-notin$supportedCommands){throw "Bilinmeyen SDD komutu: $Command"}
@@ -16,6 +16,7 @@ Get-ChildItem (Join-Path $lib 'adapters') -Filter '*.ps1' | ForEach-Object { . $
 function Show-Help {
     Write-Host "`nsdd — spec-driven development orkestratörü`n" -ForegroundColor Cyan
     Write-Host '  sdd init | upgrade [-Force] | self-update | status | tui'
+    Write-Host '  sdd spectatui install [-SkipTests]   patched SpectaTUI yan-yana kurulum'
     Write-Host '  sdd spec|plan|tasks|analyze [-Agent A] [-Model M] [-Effort E] [-Ui auto|plain|tui|raw]'
     Write-Host '  sdd implement [-ObserveEvery N] [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd converge [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
@@ -56,6 +57,7 @@ function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
     if($Command-eq'self-update'){$x=Update-SddInstallation;Write-Host "`nSDD motoru güncel: $($x.version.Substring(0,[Math]::Min(8,$x.version.Length)))" -ForegroundColor Green;Write-Host "Sonraki komutlar yeni sürümü kullanacak.`n";return}
     if($Command-eq'init'){$x=Initialize-SddProject -ProjectRoot (Get-Location).Path;Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
+    if($Command-eq'spectatui'){$sub=if($Rest.Count){[string]$Rest[0]}else{''};if($sub-ne'install'){throw 'Kullanım: sdd spectatui install [-SkipTests]'};$installer=Join-Path (Split-Path -Parent $here) 'scripts/install-spectatui-sdd.ps1';if(-not(Test-Path -LiteralPath $installer)){throw "SpectaTUI installer bulunamadı: $installer"};$installArgs=if($Rest.Count-gt1){@($Rest[1..($Rest.Count-1)])}else{@()};& $installer @installArgs;return}
     $root=Find-ProjectRoot;$paths=Get-SddPaths $root
     $upgrade=Update-SddConfigCompatibility -ConfigPath $paths.Config
     if($upgrade.changed){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
