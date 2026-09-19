@@ -128,6 +128,12 @@ try {
     Assert-True (@($finalAgentDoc.events | Where-Object event_type -eq 'agent_message_live').Count -eq 0) 'Final agent mesajı canlı partial kaydını temizlemeli.'
     Assert-True (@($finalAgentDoc.events | Where-Object { $_.event_type -eq 'agent_message' -and $_.message -eq 'Hello world' }).Count -eq 1) 'Parsed Agent Output final mesajı korumalı.'
 
+    $ledger.stages.implement.status = 'interrupted'
+    Write-Ledger -Ledger $ledger -StatePath $statePath
+    $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $fixture
+    $interruptedDoc = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    Assert-True ($interruptedDoc.stage -eq 'implement' -and $interruptedDoc.status -eq 'interrupted') 'Yarıda kesilmiş implement projectionda task aşamasına geri düşmemeli.'
+
     $secretEvent = [pscustomobject]@{
         timestamp='2026-09-19T21:18:09+03:00';run_id='run-1';sequence=33;stage='implement'
         category='assistant';event_type='agent_message';severity='info';status='completed'
