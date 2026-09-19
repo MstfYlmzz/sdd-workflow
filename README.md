@@ -4,8 +4,31 @@ Spec Kit üstüne oturan, agent-agnostik bir spec-driven development orkestratö
 Amaç: spec/plan/tasks üretildikten sonra implementasyonun **otonom** ilerlemesi;
 insanın sadece dört noktada devrede olması.
 
-Bu repo **generic**'tir. Hiçbir dosya belirli bir projeyi bilmez. Projeye dair
-her şey, o projenin içindeki tek dosyadadır: `.sdd/config.yaml`.
+Bu repo **generic**'tir. Hiçbir motor dosyası belirli bir projeyi bilmez.
+Projeye özel routing, gate ve loop ayarları o projenin `.sdd/config.yaml`
+dosyasındadır; spec ve çalışma durumu proje reposunda tutulur.
+
+## Hızlı kurulum
+
+Motoru bilgisayara bir kez clone edip global `sdd` komutunu kurun:
+
+```powershell
+git clone https://github.com/MstfYlmzz/sdd-workflow C:\Tools\sdd-workflow
+cd C:\Tools\sdd-workflow
+.\install.ps1
+```
+
+Yeni terminalde herhangi bir proje için:
+
+```powershell
+cd C:\Projects\yeni-proje
+sdd init
+sdd config
+```
+
+Motor güncellemeleri `sdd self-update` ile bütün projelere anında ulaşır.
+Skill/template güncellemeleri proje içinde `sdd upgrade` ile alınır. Ayrıntılı
+kurulum ve uçtan uca çalışma mantığı: [Kısa Kullanıcı Rehberi](docs/KULLANIM.md).
 
 ## İki-repo sınırı
 
@@ -14,7 +37,8 @@ sdd-workflow (bu repo)          proje reposu
   = LOGIC                         = CEVAP + ÇIKTI
   bin/, lib/, templates/          .sdd/config.yaml  (senin cevabın)
                                   .sdd/state.json   (üretilir)
-                                  .sdd/specs/       (üretilir)
+                                  .agents/, .specify/ (managed asset)
+                                  specs/            (spec/plan/tasks)
                                   .sdd/logs/        (üretilir)
 ```
 
@@ -74,6 +98,8 @@ Checkbox'ı her zaman **orkestratör** yazar, agent değil.
 
 ```
 sdd init                 projeye .sdd/ iskeletini kurar
+sdd upgrade [-Force]     proje skill/script/template assetlerini günceller
+sdd self-update          merkezi sdd-workflow reposunu fast-forward günceller
 sdd spec   [-Prompt ...]  spec stage'i (-Prompt: düzeltip yeniden çalıştır)
 sdd plan   [-Prompt ...]  plan stage'i
 sdd tasks  [-Prompt ...]  tasks stage'i
@@ -85,10 +111,9 @@ sdd implement -RevalidateFrom BASE -CandidateCommit COMMIT
                          başarısız validator sonrası mevcut commit'i agentsız doğrula
 sdd status               ledger özeti
 sdd config               bütün stage'leri sırayla, ok tuşlarıyla ayarlar
-sdd config implement     yalnız implement stage'ini ok tuşlarıyla ayarlar
 sdd config implement     yalnız implement routing'ini değiştirir
 sdd config plan -RunOnly seçim yapar fakat config'e yazmaz
-sdd tui                  stages/tasks/routing/history/artifacts dashboard'u
+sdd tui                  specs/tasks/stages/routing/history/artifacts dashboard'u
 ```
 
 Tüm çalışan komutlarda geçici routing override kullanılabilir:

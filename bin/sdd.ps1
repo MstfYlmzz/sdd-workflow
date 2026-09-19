@@ -2,7 +2,7 @@
 <# SDD workflow komut satırı giriş noktası. #>
 [CmdletBinding()]
 param(
-    [Parameter(Position=0)][ValidateSet('init','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks')][string]$Command,
+    [Parameter(Position=0)][ValidateSet('init','upgrade','self-update','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks')][string]$Command,
     [Parameter(Position=1,ValueFromRemainingArguments=$true)][string[]]$Rest
 )
 $ErrorActionPreference='Stop'
@@ -14,7 +14,7 @@ Get-ChildItem (Join-Path $lib 'adapters') -Filter '*.ps1' | ForEach-Object { . $
 
 function Show-Help {
     Write-Host "`nsdd — spec-driven development orkestratörü`n" -ForegroundColor Cyan
-    Write-Host '  sdd init | status | tui'
+    Write-Host '  sdd init | upgrade [-Force] | self-update | status | tui'
     Write-Host '  sdd spec|plan|tasks|analyze [-Agent A] [-Model M] [-Effort E] [-Ui auto|plain|tui|raw]'
     Write-Host '  sdd implement [-ObserveEvery N] [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd converge [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
@@ -53,11 +53,13 @@ function Invoke-WithEventContext {
 }
 function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
+    if($Command-eq'self-update'){$x=Update-SddInstallation;Write-Host "`nSDD motoru güncel: $($x.version.Substring(0,[Math]::Min(8,$x.version.Length)))" -ForegroundColor Green;Write-Host "Sonraki komutlar yeni sürümü kullanacak.`n";return}
     if($Command-eq'init'){$x=Initialize-SddProject -ProjectRoot (Get-Location).Path;Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
     $root=Find-ProjectRoot;$paths=Get-SddPaths $root
     $upgrade=Update-SddConfigCompatibility -ConfigPath $paths.Config
     if($upgrade.changed){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
     switch($Command){
+      'upgrade'{$force=$false;if($Rest.Count-gt1-or($Rest.Count-eq1-and$Rest[0]-ne'-Force')){throw 'Kullanım: sdd upgrade [-Force]'};if($Rest.Count-eq1){$force=$true};$x=Sync-SddProjectAssets -ProjectRoot $root -Force:$force;Write-Host "`nProje SDD assetleri güncellendi: $($x.updated.Count) dosya" -ForegroundColor Green;Write-Host "Workflow: $($x.workflow_version.Substring(0,[Math]::Min(8,$x.workflow_version.Length)))";if($x.updated.Count){Write-Host 'Değişiklikleri inceleyip proje reposunda commit edin.' -ForegroundColor Yellow}}
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}
       'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage='all';if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}

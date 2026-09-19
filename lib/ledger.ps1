@@ -53,6 +53,24 @@ function Write-Ledger {
     Move-Item -LiteralPath $tmp -Destination $StatePath -Force
 }
 
+function Get-SddActiveSpecId {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    $path=Join-Path $ProjectRoot '.specify/feature.json'
+    if(-not(Test-Path -LiteralPath $path)){return $null}
+    try{$feature=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json;$dir=([string]$feature.feature_directory).TrimEnd('/','\');if($dir){return (Split-Path -Leaf $dir)}}catch{}
+    return $null
+}
+
+function Get-SddSpecCatalog {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    $active=Get-SddActiveSpecId -ProjectRoot $ProjectRoot
+    foreach($dir in @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'specs') -Directory -ErrorAction SilentlyContinue|Sort-Object Name)){
+        $total=0;$done=0;$taskFile=Join-Path $dir.FullName 'tasks.md'
+        if(Test-Path -LiteralPath $taskFile){$lines=@(Get-Content -LiteralPath $taskFile);$total=@($lines|Where-Object{$_-match'^\s*-\s*\[[ xX]\]\s*T\d+'}).Count;$done=@($lines|Where-Object{$_-match'^\s*-\s*\[[xX]\]\s*T\d+'}).Count}
+        [pscustomobject]@{id=$dir.Name;active=($dir.Name-eq$active);tasks=$total;done=$done;path=$dir.FullName}
+    }
+}
+
 function Get-LedgerTasks {
     <#
       Ledger'daki task'ları düz, enumerate edilebilir bir koleksiyon olarak

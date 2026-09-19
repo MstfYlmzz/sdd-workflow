@@ -19,6 +19,7 @@ $tests = @(
     'claude-adapter.integration.ps1',
     'cursor-adapter.integration.ps1',
     'events-tui.integration.ps1',
+    'install-upgrade.integration.ps1',
     'agent-selection.integration.ps1',
     'analyze.integration.ps1',
     'converge.integration.ps1',

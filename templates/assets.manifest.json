@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "managed_roots": [
+    ".agents/skills",
+    ".specify/integrations",
+    ".specify/scripts",
+    ".specify/templates",
+    ".specify/workflows"
+  ],
+  "managed_files": [
+    ".specify/.gitignore",
+    ".specify/init-options.json",
+    ".specify/integration.json",
+    ".specify/memory/.constitution-template.json"
+  ],
+  "seed_files": [
+    ".specify/memory/constitution.md"
+  ]
+}

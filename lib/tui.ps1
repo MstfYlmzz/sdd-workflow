@@ -162,12 +162,25 @@ function Stop-SddLiveTui {
     $Context.tui_active = $false
 }
 
+function Get-SddTaskViewFromMarkdown {
+    param([Parameter(Mandatory)] [string] $TasksPath)
+    if(-not(Test-Path -LiteralPath $TasksPath)){return @()}
+    foreach($line in @(Get-Content -LiteralPath $TasksPath)){
+        if($line-match'^\s*-\s*\[([ xX])\]\s*(T\d{3,})\s+(.*)$'){
+            [pscustomobject]@{id=$Matches[2];status=$(if($Matches[1]-match'[xX]'){'done'}else{'pending'});title=$Matches[3]}
+        }
+    }
+}
+
 function Get-SddDashboardLines {
     param([Parameter(Mandatory)] [object] $Ledger, [object] $Config, [object[]] $History = @(),
-          [ValidateSet('overview','tasks','routing','history','artifacts')] [string] $Page = 'overview',
-          [string] $ProjectRoot = '', [int] $Width = 100)
+          [ValidateSet('overview','specs','tasks','routing','history','artifacts')] [string] $Page = 'overview',
+          [string] $ProjectRoot = '', [string] $SelectedSpec = '', [int] $Width = 100)
     $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add("SDD Dashboard — $($Ledger.spec_id) — $Page")
+    $activeSpec=if($ProjectRoot){Get-SddActiveSpecId -ProjectRoot $ProjectRoot}else{[string]$Ledger.spec_id}
+    if(-not$SelectedSpec){$SelectedSpec=$activeSpec}
+    $viewSuffix=if($SelectedSpec-and$SelectedSpec-ne$activeSpec){" — görüntülenen: $SelectedSpec"}else{''}
+    $lines.Add("SDD Dashboard — aktif spec: $activeSpec$viewSuffix — $Page")
     $lines.Add(('=' * [Math]::Min($Width, 80)))
     if ($Page -eq 'overview') {
         $lines.Add('Stages')
@@ -179,8 +192,15 @@ function Get-SddDashboardLines {
         $lines.Add(''); $lines.Add('Tasks')
         foreach ($grp in @(Get-LedgerTasks $Ledger | Group-Object status | Sort-Object Name)) { $lines.Add(('  {0,-12} {1}' -f $grp.Name,$grp.Count)) }
         $round=if($Ledger.stages.PSObject.Properties.Name-contains'converge'-and$Ledger.stages.converge.PSObject.Properties.Name-contains'round'){$Ledger.stages.converge.round}else{0};$lines.Add("  convergence  round $round")
+    } elseif ($Page -eq 'specs') {
+        foreach($spec in @(Get-SddSpecCatalog -ProjectRoot $ProjectRoot)){
+            $cursor=if($spec.id-eq$SelectedSpec){'❯'}else{' '};$active=if($spec.active){'[aktif]'}else{'       '}
+            $lines.Add((' {0} {1,-7} {2,-30} task {3}/{4}'-f$cursor,$active,$spec.id,$spec.done,$spec.tasks))
+        }
+        $lines.Add('');$lines.Add('↑/↓ spec seç · Enter seçilen spec tasklarını görüntüle')
     } elseif ($Page -eq 'tasks') {
-        foreach ($task in @(Get-LedgerTasks $Ledger)) {
+        $taskView=if($SelectedSpec-and$SelectedSpec-ne$activeSpec){@(Get-SddTaskViewFromMarkdown -TasksPath (Join-Path $ProjectRoot "specs/$SelectedSpec/tasks.md"))}else{@(Get-LedgerTasks $Ledger)}
+        foreach ($task in $taskView) {
             foreach($line in @(ConvertTo-SddWrappedLines -Text ('  {0,-7} {1,-11} {2}' -f $task.id,$task.status,$task.title) -Width $Width -ContinuationPrefix '                     ')){$lines.Add($line)}
         }
     } elseif ($Page -eq 'routing') {
@@ -194,7 +214,7 @@ function Get-SddDashboardLines {
             foreach($line in @(ConvertTo-SddWrappedLines -Text ("  $($e.timestamp) [$($e.stage)/$($e.category)] $($e.event_type) $message") -Width $Width -ContinuationPrefix '    ')){$lines.Add($line)}
         }
     } else {
-        $feature=if($ProjectRoot){Get-FeatureDirectory -ProjectRoot $ProjectRoot}else{$null}
+        $feature=if($ProjectRoot-and$SelectedSpec){Join-Path $ProjectRoot "specs/$SelectedSpec"}elseif($ProjectRoot){Get-FeatureDirectory -ProjectRoot $ProjectRoot}else{$null}
         foreach($name in @('spec.md','plan.md','tasks.md','research.md','data-model.md','quickstart.md')){$path=if($feature){Join-Path $feature $name}else{$name};$state=if($feature-and(Test-Path -LiteralPath $path)){'present'}else{'missing'};$lines.Add(('  {0,-18} {1}' -f $name,$state))}
     }
     $lines.Add(''); $lines.Add('Keys: ←/→ page · ↑/↓/PgUp/PgDn scroll · Home/End · r refresh · e edit · q quit')
@@ -205,14 +225,19 @@ function Show-SddDashboard {
     param([Parameter(Mandatory)] [string] $ProjectRoot)
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
     $interactive = Test-SddInteractiveTerminal
-    $pages=@('overview','tasks','routing','history','artifacts');$index=0;$offset=0
+    $pages=@('overview','specs','tasks','routing','history','artifacts');$index=0;$offset=0
+    $catalog=@(Get-SddSpecCatalog -ProjectRoot $ProjectRoot);$activeSpec=Get-SddActiveSpecId -ProjectRoot $ProjectRoot
+    $specIndex=0;for($i=0;$i-lt$catalog.Count;$i++){if($catalog[$i].id-eq$activeSpec){$specIndex=$i;break}}
+    $selectedSpec=if($catalog.Count){[string]$catalog[$specIndex].id}else{[string]$activeSpec}
     if($interactive){try{while([Console]::KeyAvailable){$null=[Console]::ReadKey($true)}}catch{}}
     do {
         $ledger = Read-Ledger -StatePath $paths.State
         $config = Read-SddConfig -ConfigPath $paths.Config
         $history = @(Get-SddRunHistory -Path $paths.Runs -Last 50)
         $size=Get-SddTerminalSize;$width=$size.Width
-        $lines = Get-SddDashboardLines -Ledger $ledger -Config $config -History $history -Page $pages[$index] -ProjectRoot $ProjectRoot -Width $width
+        $catalog=@(Get-SddSpecCatalog -ProjectRoot $ProjectRoot);if($catalog.Count-and$specIndex-ge$catalog.Count){$specIndex=$catalog.Count-1}
+        $renderSpec=if($pages[$index]-eq'specs'-and$catalog.Count){[string]$catalog[$specIndex].id}else{$selectedSpec}
+        $lines = Get-SddDashboardLines -Ledger $ledger -Config $config -History $history -Page $pages[$index] -ProjectRoot $ProjectRoot -SelectedSpec $renderSpec -Width $width
         if (-not $interactive) { $lines | ForEach-Object { Write-Host $_ }; return }
         $viewHeight=[Math]::Max(3,$size.Height-1);$maxOffset=[Math]::Max(0,$lines.Count-$viewHeight);$offset=[Math]::Min([Math]::Max(0,$offset),$maxOffset)
         $visible=@($lines|Select-Object -Skip $offset -First $viewHeight)
@@ -223,6 +248,9 @@ function Show-SddDashboard {
         $key = [Console]::ReadKey($true)
         if($key.Key-in@('RightArrow','Tab')){$index=($index+1)%$pages.Count;$offset=0}
         elseif($key.Key-eq'LeftArrow'){$index=($index-1+$pages.Count)%$pages.Count;$offset=0}
+        elseif($pages[$index]-eq'specs'-and$key.Key-eq'UpArrow'-and$catalog.Count){$specIndex=($specIndex-1+$catalog.Count)%$catalog.Count}
+        elseif($pages[$index]-eq'specs'-and$key.Key-eq'DownArrow'-and$catalog.Count){$specIndex=($specIndex+1)%$catalog.Count}
+        elseif($pages[$index]-eq'specs'-and$key.Key-eq'Enter'-and$catalog.Count){$selectedSpec=[string]$catalog[$specIndex].id;$index=[array]::IndexOf($pages,'tasks');$offset=0}
         elseif($key.Key-eq'UpArrow'){$offset=[Math]::Max(0,$offset-1)}
         elseif($key.Key-eq'DownArrow'){$offset=[Math]::Min($maxOffset,$offset+1)}
         elseif($key.Key-eq'PageUp'){$offset=[Math]::Max(0,$offset-$viewHeight)}
