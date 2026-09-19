@@ -214,6 +214,9 @@ function Send-SddEvent {
 
     Write-SddEventLog -Event $evt -LogPath $LogPath
     [void](Write-SddTelemetryEvent -Event $evt -Path $script:SddEventContext.telemetry_path)
+    if (Get-Command Write-SddSpectaEvent -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaEvent -ProjectRoot ([string]$script:SddEventContext.project_root) -Event $evt
+    }
 
     switch ([string]$script:SddEventContext.ui_mode) {
         'raw' {
