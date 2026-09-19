@@ -61,6 +61,15 @@ function Invoke-WithEventContext {
             $semanticResult.PSObject.Properties.Name -contains 'ok' -and
             -not [bool]$semanticResult.ok) {
             $status='failed'
+            $detail = ''
+            foreach ($name in @('output','reason','summary')) {
+                if ($semanticResult.PSObject.Properties.Name -contains $name -and $semanticResult.$name) {
+                    $detail = [string]$semanticResult.$name
+                    break
+                }
+            }
+            if (-not $detail) { $detail = "$Stage başarısız oldu." }
+            Send-SddEvent -Message $detail -Category 'error' -EventType 'stage_failed' -Level 'error' -Stage $Stage -Status 'failed'
         }
         return $result
     } catch {
