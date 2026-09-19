@@ -79,8 +79,12 @@ try {
     Assert-True ($doc.runtime.batch_number -eq 4 -and $doc.runtime.attempt -eq 2 -and $doc.runtime.max_attempts -eq 3) 'Batch/retry metadata görünmeli.'
     Assert-True ($doc.runtime.agent -eq 'codex' -and $doc.runtime.model -eq 'gpt-test' -and $doc.runtime.effort -eq 'high') 'Routing metadata görünmeli.'
 
-    $null = Write-SddSpectaConfig -ProjectRoot $fixture
     $configProjectionPath = Join-Path $fixture '.specify/sdd-config.json'
+    if (Test-Path -LiteralPath $configProjectionPath) { Remove-Item -LiteralPath $configProjectionPath -Force }
+    $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $fixture
+    Assert-True (Test-Path -LiteralPath $configProjectionPath) 'Status sync routing projectionı da üretmeli.'
+
+    $null = Write-SddSpectaConfig -ProjectRoot $fixture
     Assert-True (Test-Path -LiteralPath $configProjectionPath) 'Routing projection üretilmeli.'
     $configProjection = Get-Content -LiteralPath $configProjectionPath -Raw | ConvertFrom-Json
     Assert-True (-not [bool]$configProjection.authoritative) 'Routing projection authoritative olmamalı.'
