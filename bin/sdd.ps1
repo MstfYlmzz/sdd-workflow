@@ -9,7 +9,7 @@ if($Command-and$Command-notin$supportedCommands){throw "Bilinmeyen SDD komutu: $
 $ErrorActionPreference='Stop'
 try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding']='utf8' } catch {}
 $here=Split-Path -Parent $PSCommandPath; $lib=Join-Path (Split-Path -Parent $here) 'lib'
-. (Join-Path $lib 'common.ps1'); . (Join-Path $lib 'ledger.ps1'); . (Join-Path $lib 'events.ps1'); . (Join-Path $lib 'tui.ps1')
+. (Join-Path $lib 'common.ps1'); . (Join-Path $lib 'ledger.ps1'); . (Join-Path $lib 'spectatui.ps1'); . (Join-Path $lib 'events.ps1'); . (Join-Path $lib 'tui.ps1')
 . (Join-Path $lib 'stages.ps1'); . (Join-Path $lib 'tier0.ps1'); . (Join-Path $lib 'tier1.ps1'); . (Join-Path $lib 'converge.ps1'); . (Join-Path $lib 'loop.ps1'); . (Join-Path $lib 'workflow.ps1')
 Get-ChildItem (Join-Path $lib 'adapters') -Filter '*.ps1' | ForEach-Object { . $_.FullName }
 
