@@ -18,6 +18,39 @@ const STAGES: &[(&str, WorkflowStage)] = &[
     ("impl", WorkflowStage::Implementing),
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SddDisplayStage {
+    label: &'static str,
+    verb: &'static str,
+    rank: u8,
+}
+
+fn sdd_display_stage(stage: &str) -> Option<SddDisplayStage> {
+    match stage {
+        "spec" | "specify" => Some(SddDisplayStage { label: "spec", verb: "specify", rank: 1 }),
+        "plan" => Some(SddDisplayStage { label: "plan", verb: "plan", rank: 3 }),
+        "tasks" | "task" => Some(SddDisplayStage { label: "task", verb: "tasks", rank: 4 }),
+        "analyze" | "analysis" => Some(SddDisplayStage { label: "anly", verb: "analyze", rank: 5 }),
+        "implement" | "implementation" => Some(SddDisplayStage { label: "impl", verb: "implement", rank: 6 }),
+        "converge" | "convergence" => Some(SddDisplayStage { label: "conv", verb: "converge", rank: 7 }),
+        _ => None,
+    }
+}
+
+fn badge_rank(label: &str) -> Option<u8> {
+    match label {
+        "cons" => Some(0),
+        "spec" => Some(1),
+        "clar" => Some(2),
+        "plan" => Some(3),
+        "task" => Some(4),
+        "anly" => Some(5),
+        "impl" => Some(6),
+        "conv" => Some(7),
+        _ => None,
+    }
+}
+
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
     let focused = app.focused_pane == Pane::Workflow;
@@ -69,6 +102,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .sdd_status
         .as_ref()
         .filter(|status| status.spec_id == feature.id);
+    // Matching SDD projection wins for display. Artifact inference is only a
+    // fallback for projects/runs that do not have SDD state.
+    let sdd_display = sdd_status.and_then(|status| sdd_display_stage(&status.stage));
     let done_style = theme.stepper_done_style(app.theme_mode);
 
     let mut stepper_spans: Vec<Span> = vec![Span::raw(" ")];
@@ -79,7 +115,20 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         let badge_text = format!(" {label} ");
-        let style = if current_stage == WorkflowStage::Unknown {
+        let style = if let Some(sdd_stage) = sdd_display {
+            let rank = badge_rank(label).unwrap_or(u8::MAX);
+            if rank < sdd_stage.rank {
+                done_style
+            } else if rank == sdd_stage.rank {
+                theme
+                    .stage_badge(label, app.theme_mode)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                ratatui::style::Style::default()
+                    .fg(theme.faint)
+                    .bg(theme.bg)
+            }
+        } else if current_stage == WorkflowStage::Unknown {
             // Unknown sorts after every real stage (declared last for Ord), which would
             // otherwise make every badge below look "done" — show the stepper as neutral
             // instead; the distinct "unk" badge is shown separately below.
@@ -107,7 +156,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 
     if let Some(sdd) = sdd_status {
         stepper_spans.push(Span::styled("─►", theme.faint_style));
-        let conv_style = if sdd.stage == "converge" && sdd.status == "running" {
+        let conv_style = if matches!(sdd_display, Some(stage) if stage.label == "conv") {
             theme.accent_style.add_modifier(Modifier::BOLD)
         } else if sdd.runtime.convergence_round > 0 {
             done_style
@@ -126,12 +175,15 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let available_height = inner.height as usize;
 
     let (current_label, current_badge_style, stage_verb) =
-        if matches!(sdd_status, Some(sdd) if sdd.stage == "converge" && sdd.status == "running") {
-            (
-                "conv",
-                theme.accent_style.add_modifier(Modifier::BOLD),
-                "converge",
-            )
+        if let Some(sdd_stage) = sdd_display {
+            let style = if sdd_stage.label == "conv" {
+                theme.accent_style.add_modifier(Modifier::BOLD)
+            } else {
+                theme
+                    .stage_badge(sdd_stage.label, app.theme_mode)
+                    .add_modifier(Modifier::BOLD)
+            };
+            (sdd_stage.label, style, sdd_stage.verb)
         } else {
             let label = current_stage.label();
             (
@@ -142,31 +194,43 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         };
 
     if available_height > 4 {
-        lines.push(Line::from(vec![
+        let mut stage_line = vec![
             Span::styled("  Current stage: ", theme.dim_style),
             Span::styled(format!(" {current_label} "), current_badge_style),
             Span::styled(format!(" {stage_verb}"), theme.dim_style),
-        ]));
+        ];
+        if let Some(sdd) = sdd_status {
+            if !sdd.status.is_empty() {
+                stage_line.push(Span::styled(format!(" · {}", sdd.status), theme.info_style));
+            }
+        }
+        lines.push(Line::from(stage_line));
     }
 
     if available_height > 5 {
-        if let Some(progress) = app.selected_tasks_progress() {
+        let sdd_progress = sdd_status
+            .filter(|sdd| sdd.tasks.total > 0)
+            .map(|sdd| {
+                let percent = ((sdd.tasks.done as f64 / sdd.tasks.total as f64) * 100.0) as u8;
+                (sdd.tasks.done, sdd.tasks.total, percent)
+            });
+        let artifact_progress = if sdd_progress.is_none() {
+            app.selected_tasks_progress()
+                .map(|progress| (progress.done, progress.total, progress.percent()))
+        } else {
+            None
+        };
+
+        if let Some((done, total, percent)) = sdd_progress.or(artifact_progress) {
             let bar_w = (inner.width as usize).saturating_sub(26).clamp(7, 40);
-            let filled = (progress.done * bar_w)
-                .checked_div(progress.total)
-                .unwrap_or(0);
+            let filled = (done * bar_w).checked_div(total).unwrap_or(0);
             let empty = bar_w - filled;
             let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
             lines.push(Line::from(vec![
                 Span::styled("  Tasks [", theme.dim_style),
                 Span::styled(bar, theme.accent_style),
                 Span::styled(
-                    format!(
-                        "] {}/{} {}%",
-                        progress.done,
-                        progress.total,
-                        progress.percent()
-                    ),
+                    format!("] {done}/{total} {percent}%"),
                     theme.dim_style,
                 ),
             ]));
@@ -255,5 +319,26 @@ fn stage_verb(stage: WorkflowStage) -> &'static str {
         WorkflowStage::Implementing => "implement",
         WorkflowStage::Implemented => "implement",
         WorkflowStage::Unknown => "unrecognized artifact format",
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sdd_projection_stage_mapping_overrides_artifact_inference() {
+        let implement = sdd_display_stage("implement").expect("implement stage");
+        assert_eq!(implement.label, "impl");
+        assert_eq!(implement.verb, "implement");
+        assert_eq!(implement.rank, 6);
+        assert!(badge_rank("task").unwrap() < implement.rank);
+
+        let converge = sdd_display_stage("converge").expect("converge stage");
+        assert_eq!(converge.label, "conv");
+        assert_eq!(converge.rank, 7);
+
+        assert!(sdd_display_stage("unknown-stage").is_none());
     }
 }
