@@ -25,6 +25,20 @@ function Get-SddSpectaStatusPath {
     return (Join-Path $ProjectRoot '.specify/sdd-status.json')
 }
 
+function Get-SddSpectaSpecId {
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [object] $Ledger
+    )
+
+    if (Get-Command Get-SddActiveSpecId -ErrorAction SilentlyContinue) {
+        $active = [string](Get-SddActiveSpecId -ProjectRoot $ProjectRoot)
+        if (-not [string]::IsNullOrWhiteSpace($active)) { return $active }
+    }
+
+    return [string](Get-SddSpectaProperty -Object $Ledger -Name 'spec_id' -Default '')
+}
+
 function Get-SddSpectaStage {
     param([Parameter(Mandatory)] [object] $Ledger)
 
@@ -299,7 +313,7 @@ function Write-SddSpectaStatus {
     $doc = [ordered]@{
         schema_version = 1
         authoritative = $false
-        spec_id = [string](Get-SddSpectaProperty -Object $Ledger -Name 'spec_id' -Default '')
+        spec_id = Get-SddSpectaSpecId -ProjectRoot $ProjectRoot -Ledger $Ledger
         stage = $Stage
         status = $Status
         updated_at = (Get-Date).ToUniversalTime().ToString('o')
