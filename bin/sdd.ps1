@@ -2,7 +2,7 @@
 <# SDD workflow komut satırı giriş noktası.
    Argümanlar bilerek PowerShell parameter binder'a bırakılmaz. Global shim'den
    aktarılan çok satırlı -Prompt değeri Object[] olabilir. #>
-$supportedCommands=@('init','upgrade','self-update','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks')
+$supportedCommands=@('init','upgrade','self-update','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage')
 $Command=if($args.Count){[string]$args[0]}else{''}
 $Rest=if($args.Count-gt1){@($args[1..($args.Count-1)])}else{@()}
 if($Command-and$Command-notin$supportedCommands){throw "Bilinmeyen SDD komutu: $Command"}
@@ -10,7 +10,7 @@ $ErrorActionPreference='Stop'
 try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding']='utf8' } catch {}
 $here=Split-Path -Parent $PSCommandPath; $lib=Join-Path (Split-Path -Parent $here) 'lib'
 . (Join-Path $lib 'common.ps1'); . (Join-Path $lib 'ledger.ps1'); . (Join-Path $lib 'events.ps1'); . (Join-Path $lib 'tui.ps1')
-. (Join-Path $lib 'stages.ps1'); . (Join-Path $lib 'tier0.ps1'); . (Join-Path $lib 'tier1.ps1'); . (Join-Path $lib 'converge.ps1'); . (Join-Path $lib 'loop.ps1')
+. (Join-Path $lib 'stages.ps1'); . (Join-Path $lib 'tier0.ps1'); . (Join-Path $lib 'tier1.ps1'); . (Join-Path $lib 'converge.ps1'); . (Join-Path $lib 'loop.ps1'); . (Join-Path $lib 'workflow.ps1')
 Get-ChildItem (Join-Path $lib 'adapters') -Filter '*.ps1' | ForEach-Object { . $_.FullName }
 
 function Show-Help {
@@ -65,6 +65,7 @@ function Invoke-Sdd {
       'tui'{Show-SddDashboard $root}
       'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage='all';if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
+      'workflow-stage'{$stage=if($Rest.Count-eq1){[string]$Rest[0]}else{''};if($stage-notin@('prepare','analyze','closure')){throw 'Kullanım: sdd workflow-stage prepare|analyze|closure'};$wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step $stage -UiMode raw;if($wr.pause){exit 75}}
       {$_-in@('spec','plan','tasks')}{
         $o=Get-CommonArguments $Rest;$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$profile=Get-CommandProfile $cfg $Command $o $paths.Config
         $stageArgs='';$prompt='';$resume=$false;$a=@($o.remaining);for($i=0;$i-lt$a.Count;$i++){switch -Regex([string]$a[$i]){'^-Prompt$'{if(++$i-ge$a.Count){throw '-Prompt için değer gerekli.'};$prompt=if($a[$i]-is[Array]){@($a[$i]|ForEach-Object{[string]$_})-join[Environment]::NewLine}else{[string]$a[$i]};continue};'^-Resume$'{$resume=$true;continue};default{$stageArgs=(@($stageArgs,[string]$a[$i])|Where-Object{$_})-join' '}}}
