@@ -93,6 +93,12 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             .project
             .sdd_events
             .iter()
+            .filter(|event| {
+                !matches!(
+                    event.category.as_str(),
+                    "assistant" | "reasoning_summary" | "tool" | "usage"
+                )
+            })
             .rev()
             .take(event_slots)
             .collect();
