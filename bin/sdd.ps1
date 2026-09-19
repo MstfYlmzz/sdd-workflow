@@ -21,7 +21,9 @@ function Show-Help {
     Write-Host '  sdd implement [-ObserveEvery N] [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd converge [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd config               tüm stage routinglerini sırayla ayarlar'
-    Write-Host "  sdd config <stage>       yalnız verilen stage'i ayarlar`n"
+    Write-Host '  sdd config <stage>       yalnız verilen stage’i interaktif ayarlar'
+    Write-Host '  sdd config --json        routing bilgisini makine-okunur verir'
+    Write-Host "  sdd config set <stage> -Agent A -Model M -Effort E`n"
 }
 function Get-CommonArguments {
     param([object[]]$Arguments)
@@ -56,16 +58,41 @@ function Invoke-WithEventContext {
 function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
     if($Command-eq'self-update'){$x=Update-SddInstallation;Write-Host "`nSDD motoru güncel: $($x.version.Substring(0,[Math]::Min(8,$x.version.Length)))" -ForegroundColor Green;Write-Host "Sonraki komutlar yeni sürümü kullanacak.`n";return}
-    if($Command-eq'init'){$x=Initialize-SddProject -ProjectRoot (Get-Location).Path;Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
+    if($Command-eq'init'){$projectRoot=(Get-Location).Path;$x=Initialize-SddProject -ProjectRoot $projectRoot;if(Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue){$null=Write-SddSpectaConfig -ProjectRoot $projectRoot};Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
     if($Command-eq'spectatui'){$sub=if($Rest.Count){[string]$Rest[0]}else{''};if($sub-ne'install'){throw 'Kullanım: sdd spectatui install [-SkipTests]'};$installer=Join-Path (Split-Path -Parent $here) 'scripts/install-spectatui-sdd.ps1';if(-not(Test-Path -LiteralPath $installer)){throw "SpectaTUI installer bulunamadı: $installer"};$installArgs=@(if($Rest.Count-gt1){$Rest[1..($Rest.Count-1)]});& $installer @installArgs;return}
     $root=Find-ProjectRoot;$paths=Get-SddPaths $root
     $upgrade=Update-SddConfigCompatibility -ConfigPath $paths.Config
     if($upgrade.changed){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
     switch($Command){
-      'upgrade'{$force=$false;if($Rest.Count-gt1-or($Rest.Count-eq1-and$Rest[0]-ne'-Force')){throw 'Kullanım: sdd upgrade [-Force]'};if($Rest.Count-eq1){$force=$true};$x=Sync-SddProjectAssets -ProjectRoot $root -Force:$force;Write-Host "`nProje SDD assetleri güncellendi: $($x.updated.Count) dosya" -ForegroundColor Green;Write-Host "Workflow: $($x.workflow_version.Substring(0,[Math]::Min(8,$x.workflow_version.Length)))";if($x.updated.Count){Write-Host 'Değişiklikleri inceleyip proje reposunda commit edin.' -ForegroundColor Yellow}}
+      'upgrade'{$force=$false;if($Rest.Count-gt1-or($Rest.Count-eq1-and$Rest[0]-ne'-Force')){throw 'Kullanım: sdd upgrade [-Force]'};if($Rest.Count-eq1){$force=$true};$x=Sync-SddProjectAssets -ProjectRoot $root -Force:$force;if(Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue){$null=Write-SddSpectaConfig -ProjectRoot $root};Write-Host "`nProje SDD assetleri güncellendi: $($x.updated.Count) dosya" -ForegroundColor Green;Write-Host "Workflow: $($x.workflow_version.Substring(0,[Math]::Min(8,$x.workflow_version.Length)))";if($x.updated.Count){Write-Host 'Değişiklikleri inceleyip proje reposunda commit edin.' -ForegroundColor Yellow}}
       'status'{Show-LedgerStatus $paths.State}
       'tui'{Show-SddDashboard $root}
-      'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage='all';if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
+      'config'{
+        if($Rest.Count-eq1-and[string]$Rest[0]-eq'--json'){
+            $doc=Get-SddSpectaConfigDocument -ProjectRoot $root
+            if(-not$doc){throw 'SDD config okunamadı.'}
+            $doc|ConvertTo-Json -Depth 8
+            break
+        }
+        if($Rest.Count-ge2-and[string]$Rest[0]-eq'set'){
+            $stage=[string]$Rest[1]
+            if($stage-notin@('spec','plan','tasks','analyze','implement','converge')){throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'}
+            $tail=@(if($Rest.Count-gt2){$Rest[2..($Rest.Count-1)]})
+            $o=Get-CommonArguments $tail
+            if($o.remaining.Count-or-not$o.agent-or-not$o.model-or-not$o.effort){throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'}
+            $null=Set-SddStageProfile -ConfigPath $paths.Config -StageName $stage -Agent ([string]$o.agent) -Model ([string]$o.model) -Effort ([string]$o.effort
+            )
+            $doc=Get-SddSpectaConfigDocument -ProjectRoot $root
+            $doc|ConvertTo-Json -Depth 8
+            break
+        }
+        $o=Get-CommonArguments $Rest
+        if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'}
+        $stage='all'
+        if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]}
+        $cfg=Read-SddConfig $paths.Config
+        $null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only
+      }
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
       'workflow-stage'{$stage=if($Rest.Count-eq1){[string]$Rest[0]}else{''};if($stage-notin@('prepare','analyze','closure')){throw 'Kullanım: sdd workflow-stage prepare|analyze|closure'};$wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step $stage -UiMode raw;if($wr.pause){exit 75}}
       {$_-in@('spec','plan','tasks')}{
