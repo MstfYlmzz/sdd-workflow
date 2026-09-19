@@ -69,6 +69,20 @@ try {
     $analyzeRoute = @($configProjection.routes | Where-Object stage -eq 'analyze')[0]
     Assert-True ($analyzeRoute.agent -eq 'claude' -and $analyzeRoute.model -eq 'sonnet' -and $analyzeRoute.effort -eq 'high') 'Config değişikliği routing projectiona anında yansımalı.'
 
+    Push-Location $fixture
+    try {
+        $jsonText = @(& (Join-Path $repoRoot 'bin/sdd.ps1') config --json) -join [Environment]::NewLine
+        $jsonDoc = $jsonText | ConvertFrom-Json
+        Assert-True (@($jsonDoc.routes).Count -eq 6) 'sdd config --json altı routing satırı döndürmeli.'
+
+        $setText = @(& (Join-Path $repoRoot 'bin/sdd.ps1') config set tasks -Agent cursor -Model auto -Effort medium) -join [Environment]::NewLine
+        $setDoc = $setText | ConvertFrom-Json
+        $tasksRoute = @($setDoc.routes | Where-Object stage -eq 'tasks')[0]
+        Assert-True ($tasksRoute.agent -eq 'cursor' -and $tasksRoute.model -eq 'auto') 'Noninteractive config set SpectaTUI backend sözleşmesini uygulamalı.'
+    } finally {
+        Pop-Location
+    }
+
     $event = [pscustomobject]@{
         timestamp='2026-09-19T21:18:05+03:00';run_id='run-1';sequence=28;stage='implement'
         category='gate';event_type='gate_completed';severity='info';status='failed'
