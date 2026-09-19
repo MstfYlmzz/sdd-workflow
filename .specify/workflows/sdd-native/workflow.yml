@@ -1,0 +1,24 @@
+schema_version: "1.0"
+workflow:
+  id: "sdd-native"
+  name: "SDD Native Closure"
+  version: "0.1.0"
+  author: "sdd-workflow"
+  description: "Runs the existing multi-agent SDD domain engine under Spec Kit workflow state for SpectaTUI run/resume/status."
+
+requires:
+  speckit_version: ">=1.0.6"
+
+steps:
+  - id: tasks-ready
+    type: sdd-process
+    run: "sdd workflow-stage prepare"
+
+  - id: analyze
+    type: sdd-process
+    run: "sdd workflow-stage analyze"
+
+  - id: autonomous-closure
+    type: sdd-process
+    run: "sdd workflow-stage closure"
+    pause_exit_codes: [75]
