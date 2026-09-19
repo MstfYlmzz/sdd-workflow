@@ -938,6 +938,18 @@ impl App {
         self.sdd_edit_effort = route.effort;
     }
 
+    pub fn apply_sdd_route_edit_local(&mut self) {
+        let Some(config) = self.project.sdd_config.as_mut() else {
+            return;
+        };
+        let Some(route) = config.routes.get_mut(self.sdd_control_index) else {
+            return;
+        };
+        route.agent = self.sdd_edit_agent.clone();
+        route.model = self.sdd_edit_model.clone();
+        route.effort = self.sdd_edit_effort.clone();
+    }
+
     pub fn sdd_route_field_next(&mut self) {
         self.sdd_route_field = (self.sdd_route_field + 1) % 3;
     }
@@ -1354,6 +1366,16 @@ impl App {
                     if success {
                         should_refresh = true;
                     } else {
+                        // SDD route edits are applied optimistically in-memory so the
+                        // control screen reflects Ctrl+S immediately. If persistence
+                        // fails, reload the authoritative projection to roll that UI
+                        // change back.
+                        if matches!(
+                            self.cli_job.as_ref().map(|job| &job.action),
+                            Some(CliAction::SddConfigSet { .. })
+                        ) {
+                            should_refresh = true;
+                        }
                         // A failed remove must not later chain into an add that was
                         // queued for a completely different, still-pending edit.
                         self.pending_followup_action = None;
@@ -1999,6 +2021,31 @@ mod tests {
             sdd_config: None,
         };
         App::new(project, AppConfig::default())
+    }
+
+    #[test]
+    fn sdd_route_edit_applies_immediately_in_memory() {
+        let mut app = test_app();
+        app.project.sdd_config = Some(spectatui_core::speckit::SddConfigProjection {
+            routes: vec![spectatui_core::speckit::SddRouteProfile {
+                stage: "implement".to_string(),
+                agent: "codex".to_string(),
+                model: "gpt-a".to_string(),
+                effort: "medium".to_string(),
+            }],
+            ..Default::default()
+        });
+        app.sdd_control_index = 0;
+        app.begin_sdd_route_edit();
+        app.sdd_edit_agent = "claude".to_string();
+        app.sdd_edit_model = "sonnet".to_string();
+        app.sdd_edit_effort = "high".to_string();
+        app.apply_sdd_route_edit_local();
+
+        let route = app.selected_sdd_route().expect("route");
+        assert_eq!(route.agent, "claude");
+        assert_eq!(route.model, "sonnet");
+        assert_eq!(route.effort, "high");
     }
 
     #[test]
