@@ -401,6 +401,8 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if app.active_popup == Some(PopupKind::Catalogs) && app.cat_add_input.is_some() {
             app.cat_add_clear();
+        } else if app.active_popup == Some(PopupKind::SddControl) && app.sdd_route_editing {
+            app.sdd_route_editing = false;
         } else {
             app.should_quit = true;
         }
@@ -576,6 +578,110 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
                                     app,
                                     cli_client,
                                     &CliAction::IntegrationGetInfo { key: k.clone() },
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            },
+            PopupKind::SddControl => {
+                if app.sdd_route_editing {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('s')
+                    {
+                        let stage = app.selected_sdd_route().map(|r| r.stage.clone());
+                        if let Some(stage) = stage {
+                            if !app.sdd_edit_agent.is_empty()
+                                && !app.sdd_edit_model.is_empty()
+                                && !app.sdd_edit_effort.is_empty()
+                                && app.can_start_cli_action()
+                            {
+                                let action = CliAction::SddConfigSet {
+                                    stage,
+                                    agent: app.sdd_edit_agent.clone(),
+                                    model: app.sdd_edit_model.clone(),
+                                    effort: app.sdd_edit_effort.clone(),
+                                };
+                                let (job, rx) = cli_client.spawn_job(&action);
+                                app.cli_job = Some(job);
+                                app.cli_rx = Some(rx);
+                                app.cli_scroll = 0;
+                                app.sdd_route_editing = false;
+                            }
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => app.sdd_route_editing = false,
+                            KeyCode::Tab => {
+                                app.sdd_route_field = (app.sdd_route_field + 1) % 3;
+                            }
+                            KeyCode::BackTab => {
+                                app.sdd_route_field = (app.sdd_route_field + 2) % 3;
+                            }
+                            KeyCode::Left => match app.sdd_route_field {
+                                0 => app.cycle_sdd_agent(-1),
+                                2 => app.cycle_sdd_effort(-1),
+                                _ => {}
+                            },
+                            KeyCode::Right => match app.sdd_route_field {
+                                0 => app.cycle_sdd_agent(1),
+                                2 => app.cycle_sdd_effort(1),
+                                _ => {}
+                            },
+                            KeyCode::Backspace if app.sdd_route_field == 1 => {
+                                app.sdd_edit_model.pop();
+                            }
+                            KeyCode::Delete if app.sdd_route_field == 1 => {
+                                app.sdd_edit_model.clear();
+                            }
+                            KeyCode::Char(c)
+                                if app.sdd_route_field == 1
+                                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                app.sdd_edit_model.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Esc => app.close_popup(),
+                        KeyCode::Up | KeyCode::Char('k') => app.sdd_select_prev(),
+                        KeyCode::Down | KeyCode::Char('j') => app.sdd_select_next(),
+                        KeyCode::Char('e') | KeyCode::Enter => app.begin_sdd_route_edit(),
+                        KeyCode::Char('r') => {
+                            if let Some(stage) =
+                                app.selected_sdd_route().map(|route| route.stage.clone())
+                            {
+                                spawn_and_show_cli_job(
+                                    app,
+                                    cli_client,
+                                    &CliAction::SddStageRun { stage },
+                                );
+                            }
+                        }
+                        KeyCode::Char('f') => {
+                            spawn_and_show_cli_job(
+                                app,
+                                cli_client,
+                                &CliAction::WorkflowRun {
+                                    source: "sdd-native".to_string(),
+                                },
+                            );
+                        }
+                        KeyCode::Char('R') => {
+                            let run_id = app
+                                .project
+                                .workflows
+                                .iter()
+                                .find(|wf| wf.id == "sdd-native")
+                                .and_then(|wf| wf.last_run.clone());
+                            if let Some(run_id) = run_id {
+                                spawn_and_show_cli_job(
+                                    app,
+                                    cli_client,
+                                    &CliAction::WorkflowResume { run_id },
                                 );
                             }
                         }
@@ -922,6 +1028,10 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
             app.open_popup(PopupKind::Catalogs);
             return;
         }
+        KeyCode::Char('D') => {
+            app.open_popup(PopupKind::SddControl);
+            return;
+        }
         _ => {}
     }
 
@@ -1038,11 +1148,10 @@ fn request_cli_action(app: &mut App, action: CliAction, cli_client: &SpecifyCliC
 fn is_sdd_background_action(app: &App, action: &CliAction) -> bool {
     match action {
         CliAction::WorkflowRun { source } => source == "sdd-native",
-        CliAction::WorkflowResume { .. } => app
-            .filtered_workflows()
-            .get(app.wf_index)
-            .map(|wf| wf.id.as_str())
-            == Some("sdd-native"),
+        CliAction::WorkflowResume { run_id } => app.project.workflows.iter().any(|wf| {
+            wf.id == "sdd-native" && wf.last_run.as_deref() == Some(run_id.as_str())
+        }),
+        CliAction::SddStageRun { .. } => true,
         _ => false,
     }
 }
