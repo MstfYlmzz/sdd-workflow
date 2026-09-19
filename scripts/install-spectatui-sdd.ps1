@@ -61,6 +61,8 @@ try {
         try {
             & cargo test -p spectatui-core discover_loads_sdd
             if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI core SDD projection testi başarısız.' }
+            & cargo test -p spectatui-core sdd_control_actions_build_expected_commands
+            if ($LASTEXITCODE -ne 0) { throw 'SpectaTUI SDD control action testi başarısız.' }
             & cargo check -p spectatui
             if ($LASTEXITCODE -ne 0) { throw 'Patched SpectaTUI compile kontrolü başarısız.' }
         } finally {
