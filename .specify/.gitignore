@@ -7,3 +7,6 @@ feature.json
 
 # Per-machine extension config overrides.
 extensions/*/local-config.yml
+
+# Resumable workflow engine run state is machine-local pipeline state.
+workflows/runs/
