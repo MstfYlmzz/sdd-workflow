@@ -191,7 +191,15 @@ function Send-SddEvent {
         usage = $Usage
         metadata = $Metadata
     }
-    $script:SddEventContext.events.Add($evt)
+    $renderEvent = $evt
+    if ($EventType -eq 'agent_message_partial' -and $script:SddEventContext.events.Count -gt 0) {
+        $last = $script:SddEventContext.events[$script:SddEventContext.events.Count - 1]
+        if ($last.event_type -eq 'agent_message_partial' -and $last.provider -eq $Provider -and $last.stage -eq $evt.stage) {
+            $last.message = (ConvertTo-SddSafeText -Value (([string]$last.message) + ([string]$evt.message)))
+            $last.timestamp = $evt.timestamp; $last.sequence = $evt.sequence
+            $renderEvent = $last
+        } else { $script:SddEventContext.events.Add($evt) }
+    } else { $script:SddEventContext.events.Add($evt) }
     while ($script:SddEventContext.events.Count -gt 250) { $script:SddEventContext.events.RemoveAt(0) }
 
     Write-SddEventLog -Event $evt -LogPath $LogPath
@@ -204,7 +212,7 @@ function Send-SddEvent {
         }
         'tui' {
             if (Get-Command Update-SddLiveTui -ErrorAction SilentlyContinue) {
-                Update-SddLiveTui -Context $script:SddEventContext -Event $evt
+                Update-SddLiveTui -Context $script:SddEventContext -Event $renderEvent
             }
         }
         default {

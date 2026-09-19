@@ -76,7 +76,7 @@ function Get-SddLiveTuiLines {
     $ops = @($events | Where-Object category -in @('tool','command','command_output','file_change'))
     $flow = @($events | Where-Object category -in @('workflow','gate','error','usage'))
 
-    $mark=if($active-eq'ai'){'▶'}else{' '};$header=Limit-SddText -Text ("$mark AI MESAJI  [Tab panel · ↑/↓ scroll · End canlı]") -Width $inner;$lines.Add('│' + $header.PadRight($inner) + '│')
+    $mark=if($active-eq'ai'){'▶'}else{' '};$header=Limit-SddText -Text ("$mark AI MESAJI  [Tab panel · mouse/↑↓ scroll · End canlı]") -Width $inner;$lines.Add('│' + $header.PadRight($inner) + '│')
     foreach ($text in @(Get-SddPaneContent -Events $ai -Width $inner -Height $aiHeight -ScrollOffset ([int]$scroll.ai) -PlainMessage)) { $lines.Add('│' + $text.PadRight($inner) + '│') }
     $lines.Add('├' + ('─' * $inner) + '┤')
     $mark=if($active-eq'ops'){'▶'}else{' '};$header=Limit-SddText -Text ("$mark İŞLEMLER / TERMİNAL") -Width $inner;$lines.Add('│' + $header.PadRight($inner) + '│')
@@ -92,10 +92,36 @@ function Get-SddLiveTuiLines {
 function Start-SddLiveTui {
     param([Parameter(Mandatory)] [object] $Context)
     if (-not (Test-SddInteractiveTerminal)) { $Context.ui_mode = 'plain'; return }
-    Write-Host -NoNewline "$script:SddEsc[?1049h$script:SddEsc[?25l"
+    # 1000 = mouse press/wheel tracking, 1006 = SGR coordinates.
+    Write-Host -NoNewline "$script:SddEsc[?1049h$script:SddEsc[?25l$script:SddEsc[?1000h$script:SddEsc[?1006h"
     $Context.tui_active_pane = 'ai'
     $Context.tui_scroll = @{ai=0;ops=0;flow=0}
     $Context.tui_active = $true
+}
+
+function ConvertFrom-SddMouseSequence {
+    param([AllowEmptyString()] [string] $Sequence)
+    if ($Sequence -match '^\x1b\[<(64|65);(\d+);(\d+)[mM]$') {
+        return [pscustomobject]@{ delta=$(if($Matches[1]-eq'64'){1}else{-1}); x=[int]$Matches[2]; y=[int]$Matches[3] }
+    }
+    return $null
+}
+
+function Get-SddPaneAtRow {
+    param([int] $Row,[int] $TerminalHeight)
+    $available=[Math]::Max(6,$TerminalHeight-9)
+    $aiHeight=[Math]::Max(2,[Math]::Floor($available*0.30));$opsHeight=[Math]::Max(2,[Math]::Floor($available*0.40))
+    $aiEnd=4+$aiHeight;$opsEnd=$aiEnd+2+$opsHeight
+    if($Row-le$aiEnd){return 'ai'};if($Row-le$opsEnd){return 'ops'};return 'flow'
+}
+
+function Read-SddPendingEscapeSequence {
+    $builder=[Text.StringBuilder]::new();[void]$builder.Append($script:SddEsc)
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    while($builder.Length-lt40-and$watch.ElapsedMilliseconds-lt12){
+        if([Console]::KeyAvailable){$next=[Console]::ReadKey($true);[void]$builder.Append($next.KeyChar);if($next.KeyChar-in@('M','m')){break}}
+    }
+    return $builder.ToString()
 }
 
 function Update-SddLiveInput {
@@ -103,6 +129,15 @@ function Update-SddLiveInput {
     try {
         while ([Console]::KeyAvailable) {
             $key=[Console]::ReadKey($true);$panes=@('ai','ops','flow');$pane=[string]$Context.tui_active_pane
+            if($key.Key-eq'Escape'){
+                $mouse=ConvertFrom-SddMouseSequence -Sequence (Read-SddPendingEscapeSequence)
+                if($mouse){
+                    $pane=Get-SddPaneAtRow -Row $mouse.y -TerminalHeight (Get-SddTerminalSize).Height
+                    $Context.tui_active_pane=$pane
+                    $Context.tui_scroll[$pane]=[Math]::Max(0,[int]$Context.tui_scroll[$pane]+(3*$mouse.delta))
+                }
+                continue
+            }
             if($key.Key-eq'Tab'){$Context.tui_active_pane=$panes[($panes.IndexOf($pane)+1)%$panes.Count];continue}
             $step=switch($key.Key){'UpArrow'{1};'PageUp'{8};'DownArrow'{-1};'PageDown'{-8};'End'{-[int]$Context.tui_scroll[$pane]};default{0}}
             if($step-ne0){$Context.tui_scroll[$pane]=[Math]::Max(0,[int]$Context.tui_scroll[$pane]+$step)}
@@ -123,7 +158,7 @@ function Update-SddLiveTui {
 function Stop-SddLiveTui {
     param([Parameter(Mandatory)] [object] $Context)
     if (-not $Context.tui_active) { return }
-    Write-Host -NoNewline "$script:SddEsc[?25h$script:SddEsc[?1049l"
+    Write-Host -NoNewline "$script:SddEsc[?1006l$script:SddEsc[?1000l$script:SddEsc[?25h$script:SddEsc[?1049l"
     $Context.tui_active = $false
 }
 

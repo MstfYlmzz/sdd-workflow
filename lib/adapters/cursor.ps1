@@ -60,10 +60,29 @@ function Read-CursorEvent {
         if (-not $msg) { $msg = $Line }
         $Result.denied.Add($msg); Send-SddEvent -Message $msg -LogPath $LogPath -Level 'error' -Category 'error' -EventType 'provider_error' -Source 'provider' -Provider 'cursor'
     }
-    if ($type -match '(?i)result|complete|completed|done|finish') { $Result._completed = $true }
+    $isResult = $type -match '(?i)^result$|complete|completed|done|finish'
+    if ($isResult) { $Result._completed = $true }
+    $isAssistant = $type -match '(?i)^assistant(?:_message)?$'
+    $hasTimestamp = $evt.PSObject.Properties.Name -contains 'timestamp_ms'
+    $hasModelCall = $evt.PSObject.Properties.Name -contains 'model_call_id'
     foreach ($part in @(Get-CursorEventTexts -Event $evt)) {
-        $MessageParts.Add($part); $Result.last_message = $part
-        Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'cursor'
+        if ($isAssistant -and [bool]$Result._stream_partial) {
+            # Cursor partial sözleşmesi: yalnız timestamp'li, model_call_id'siz
+            # olay yeni deltadır. Diğer assistant olayları buffered/final tekrar.
+            if (-not $hasTimestamp -or $hasModelCall) { continue }
+            $MessageParts.Add($part); $Result.last_message = ([string]$Result.last_message) + $part
+            Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message_partial' -Source 'provider' -Provider 'cursor'
+            continue
+        }
+        if ($isResult) {
+            $Result.last_message = $part
+            if ($MessageParts.Count -eq 0) { $MessageParts.Add($part) }
+            continue
+        }
+        if ($isAssistant) {
+            $MessageParts.Add($part); $Result.last_message = $part
+            Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'cursor'
+        }
     }
     $usage = Get-CursorEventValue -Object $evt -Names @('usage','token_usage','tokenUsage')
     if ($usage) { $Result.usage = $usage; Send-SddEvent -Message 'Cursor usage alındı' -LogPath $LogPath -Category 'usage' -EventType 'usage' -Source 'provider' -Provider 'cursor' -Usage $usage }
@@ -91,6 +110,7 @@ function Invoke-CursorAgent {
         ok = $false; session_id = $null
         denied = [System.Collections.Generic.List[string]]::new()
         last_message = $null; log_path = $Request.log_path; usage = $null; _completed = $false
+        _stream_partial = [bool]($Request.ContainsKey('stream_partial') -and $Request.stream_partial)
     }
     $parts = [System.Collections.Generic.List[string]]::new()
     $exitCode = -1
@@ -111,6 +131,6 @@ function Invoke-CursorAgent {
     $sawStream = $result._completed -or $parts.Count -gt 0 -or $result.session_id
     $result.ok = [bool]$sawStream -and $exitCode -eq 0 -and $result.denied.Count -eq 0
     $result.denied = @($result.denied)
-    $result.Remove('_completed')
+    $result.Remove('_completed'); $result.Remove('_stream_partial')
     return [pscustomobject]$result
 }
