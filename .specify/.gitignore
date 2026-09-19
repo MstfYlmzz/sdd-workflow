@@ -10,3 +10,7 @@ extensions/*/local-config.yml
 
 # Resumable workflow engine run state is machine-local pipeline state.
 workflows/runs/
+
+# Python bytecode created when Spec Kit loads project-local workflow steps.
+__pycache__/
+*.py[cod]
