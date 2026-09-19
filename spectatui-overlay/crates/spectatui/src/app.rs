@@ -938,6 +938,69 @@ impl App {
         self.sdd_edit_effort = route.effort;
     }
 
+    pub fn sdd_route_field_next(&mut self) {
+        self.sdd_route_field = (self.sdd_route_field + 1) % 3;
+    }
+
+    pub fn sdd_route_field_prev(&mut self) {
+        self.sdd_route_field = (self.sdd_route_field + 2) % 3;
+    }
+
+    pub fn sdd_provider_models(&self, agent: &str) -> Vec<String> {
+        self.project
+            .sdd_config
+            .as_ref()
+            .and_then(|cfg| cfg.providers.iter().find(|provider| provider.agent == agent))
+            .map(|provider| provider.models.clone())
+            .unwrap_or_else(|| match agent {
+                "codex" => vec![
+                    "gpt-5.6-sol".to_string(),
+                    "gpt-5.6-terra".to_string(),
+                    "gpt-5.6-luna".to_string(),
+                ],
+                "claude" => vec![
+                    "sonnet".to_string(),
+                    "opus".to_string(),
+                    "haiku".to_string(),
+                ],
+                _ => vec!["auto".to_string()],
+            })
+    }
+
+    pub fn sdd_provider_efforts(&self, agent: &str) -> Vec<String> {
+        self.project
+            .sdd_config
+            .as_ref()
+            .and_then(|cfg| cfg.providers.iter().find(|provider| provider.agent == agent))
+            .map(|provider| provider.efforts.clone())
+            .filter(|efforts| !efforts.is_empty())
+            .unwrap_or_else(|| {
+                if agent == "cursor" {
+                    vec!["medium".to_string()]
+                } else {
+                    vec![
+                        "low".to_string(),
+                        "medium".to_string(),
+                        "high".to_string(),
+                        "xhigh".to_string(),
+                        "max".to_string(),
+                    ]
+                }
+            })
+    }
+
+    fn normalize_sdd_route_values(&mut self) {
+        let models = self.sdd_provider_models(&self.sdd_edit_agent);
+        if !models.is_empty() && !models.iter().any(|model| model == &self.sdd_edit_model) {
+            self.sdd_edit_model = models[0].clone();
+        }
+
+        let efforts = self.sdd_provider_efforts(&self.sdd_edit_agent);
+        if !efforts.is_empty() && !efforts.iter().any(|effort| effort == &self.sdd_edit_effort) {
+            self.sdd_edit_effort = efforts[0].clone();
+        }
+    }
+
     pub fn cycle_sdd_agent(&mut self, delta: i32) {
         const AGENTS: &[&str] = &["codex", "claude", "cursor"];
         let current = AGENTS
@@ -946,23 +1009,42 @@ impl App {
             .unwrap_or(0) as i32;
         let next = (current + delta).rem_euclid(AGENTS.len() as i32) as usize;
         self.sdd_edit_agent = AGENTS[next].to_string();
-        if self.sdd_edit_agent == "cursor" {
-            self.sdd_edit_effort = "medium".to_string();
+        self.normalize_sdd_route_values();
+    }
+
+    pub fn cycle_sdd_model(&mut self, delta: i32) {
+        let models = self.sdd_provider_models(&self.sdd_edit_agent);
+        if models.is_empty() {
+            return;
         }
+        let current = models
+            .iter()
+            .position(|model| model == &self.sdd_edit_model)
+            .unwrap_or(0) as i32;
+        let next = (current + delta).rem_euclid(models.len() as i32) as usize;
+        self.sdd_edit_model = models[next].clone();
     }
 
     pub fn cycle_sdd_effort(&mut self, delta: i32) {
-        if self.sdd_edit_agent == "cursor" {
-            self.sdd_edit_effort = "medium".to_string();
+        let efforts = self.sdd_provider_efforts(&self.sdd_edit_agent);
+        if efforts.is_empty() {
             return;
         }
-        const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-        let current = EFFORTS
+        let current = efforts
             .iter()
-            .position(|v| *v == self.sdd_edit_effort)
-            .unwrap_or(1) as i32;
-        let next = (current + delta).rem_euclid(EFFORTS.len() as i32) as usize;
-        self.sdd_edit_effort = EFFORTS[next].to_string();
+            .position(|effort| effort == &self.sdd_edit_effort)
+            .unwrap_or(0) as i32;
+        let next = (current + delta).rem_euclid(efforts.len() as i32) as usize;
+        self.sdd_edit_effort = efforts[next].clone();
+    }
+
+    pub fn cycle_sdd_route_value(&mut self, delta: i32) {
+        match self.sdd_route_field {
+            0 => self.cycle_sdd_agent(delta),
+            1 => self.cycle_sdd_model(delta),
+            2 => self.cycle_sdd_effort(delta),
+            _ => {}
+        }
     }
 
     /// Open the Catalog Manager, always resetting to the Extensions tab
@@ -1917,6 +1999,48 @@ mod tests {
             sdd_config: None,
         };
         App::new(project, AppConfig::default())
+    }
+
+    #[test]
+    fn sdd_route_editor_uses_provider_model_lists() {
+        let mut app = test_app();
+        app.project.sdd_config = Some(spectatui_core::speckit::SddConfigProjection {
+            routes: vec![spectatui_core::speckit::SddRouteProfile {
+                stage: "implement".to_string(),
+                agent: "codex".to_string(),
+                model: "gpt-a".to_string(),
+                effort: "medium".to_string(),
+            }],
+            providers: vec![
+                spectatui_core::speckit::SddProviderCatalog {
+                    agent: "codex".to_string(),
+                    available: true,
+                    models: vec!["gpt-a".to_string(), "gpt-b".to_string()],
+                    efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+                },
+                spectatui_core::speckit::SddProviderCatalog {
+                    agent: "claude".to_string(),
+                    available: true,
+                    models: vec!["sonnet".to_string(), "opus".to_string()],
+                    efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+                },
+            ],
+            ..Default::default()
+        });
+        app.sdd_control_index = 0;
+        app.begin_sdd_route_edit();
+
+        assert_eq!(app.sdd_route_field, 0);
+        app.sdd_route_field_next();
+        assert_eq!(app.sdd_route_field, 1);
+        app.cycle_sdd_route_value(1);
+        assert_eq!(app.sdd_edit_model, "gpt-b");
+
+        app.sdd_route_field_prev();
+        assert_eq!(app.sdd_route_field, 0);
+        app.cycle_sdd_route_value(1);
+        assert_eq!(app.sdd_edit_agent, "claude");
+        assert_eq!(app.sdd_edit_model, "sonnet");
     }
 
     #[test]
