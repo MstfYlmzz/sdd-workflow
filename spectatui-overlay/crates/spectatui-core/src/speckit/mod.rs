@@ -23,6 +23,7 @@ pub struct Project {
     pub workflows: Vec<WorkflowInfo>,
     pub sdd_status: Option<SddStatus>,
     pub sdd_events: Vec<SddEventSummary>,
+    pub sdd_config: Option<SddConfigProjection>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +82,30 @@ pub struct SddRuntimeStatus {
     pub max_convergence_rounds: u32,
     #[serde(default)]
     pub stop_reason: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SddRouteProfile {
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub effort: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SddConfigProjection {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub authoritative: bool,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub routes: Vec<SddRouteProfile>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -151,6 +176,7 @@ impl Project {
         let integrations = registry::load_integrations(&root)?;
         let sdd_status = load_sdd_status(&root);
         let sdd_events = load_sdd_events(&root);
+        let sdd_config = load_sdd_config(&root);
 
         Ok(Project {
             root,
@@ -162,6 +188,7 @@ impl Project {
             workflows: Vec::new(),
             sdd_status,
             sdd_events,
+            sdd_config,
         })
     }
 
@@ -176,6 +203,12 @@ impl Project {
 
 fn load_sdd_status(root: &Path) -> Option<SddStatus> {
     let path = root.join(".specify/sdd-status.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn load_sdd_config(root: &Path) -> Option<SddConfigProjection> {
+    let path = root.join(".specify/sdd-config.json");
     let content = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -294,6 +327,24 @@ mod tests {
         assert_eq!(status.runtime.batch, vec!["T003"]);
         assert_eq!(status.runtime.convergence_round, 2);
         assert!(!status.authoritative);
+    }
+
+    #[test]
+    fn discover_loads_sdd_config_projection() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".specify")).unwrap();
+        std::fs::write(
+            tmp.path().join(".specify/sdd-config.json"),
+            r#"{"schema_version":1,"authoritative":false,"routes":[{"stage":"implement","agent":"codex","model":"gpt-test","effort":"medium"}]}"#,
+        )
+        .unwrap();
+
+        let project = Project::discover(tmp.path()).unwrap();
+        let config = project.sdd_config.expect("sdd config");
+        assert!(!config.authoritative);
+        assert_eq!(config.routes.len(), 1);
+        assert_eq!(config.routes[0].stage, "implement");
+        assert_eq!(config.routes[0].agent, "codex");
     }
 
     #[test]
