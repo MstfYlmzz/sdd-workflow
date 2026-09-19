@@ -34,3 +34,13 @@ jobs:
       - name: Run Spec Kit workflow E2E
         shell: pwsh
         run: pwsh -NoProfile -File ./tests/spec-kit-workflow.e2e.ps1
+
+  spectatui-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build patched SpectaTUI overlay
+        shell: pwsh
+        run: pwsh -NoProfile -File ./scripts/install-spectatui-sdd.ps1 -NoInstall
