@@ -97,6 +97,18 @@ pub struct SddRouteProfile {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct SddProviderCatalog {
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub efforts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SddConfigProjection {
     #[serde(default)]
     pub schema_version: u32,
@@ -106,6 +118,8 @@ pub struct SddConfigProjection {
     pub updated_at: String,
     #[serde(default)]
     pub routes: Vec<SddRouteProfile>,
+    #[serde(default)]
+    pub providers: Vec<SddProviderCatalog>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -335,7 +349,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join(".specify")).unwrap();
         std::fs::write(
             tmp.path().join(".specify/sdd-config.json"),
-            r#"{"schema_version":1,"authoritative":false,"routes":[{"stage":"implement","agent":"codex","model":"gpt-test","effort":"medium"}]}"#,
+            r#"{"schema_version":1,"authoritative":false,"routes":[{"stage":"implement","agent":"codex","model":"gpt-test","effort":"medium"}],"providers":[{"agent":"codex","available":true,"models":["gpt-test","gpt-other"],"efforts":["low","medium","high"]}]}"#,
         )
         .unwrap();
 
@@ -345,6 +359,8 @@ mod tests {
         assert_eq!(config.routes.len(), 1);
         assert_eq!(config.routes[0].stage, "implement");
         assert_eq!(config.routes[0].agent, "codex");
+        assert_eq!(config.providers.len(), 1);
+        assert_eq!(config.providers[0].models, vec!["gpt-test", "gpt-other"]);
     }
 
     #[test]
