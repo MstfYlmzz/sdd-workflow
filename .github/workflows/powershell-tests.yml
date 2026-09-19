@@ -25,3 +25,12 @@ jobs:
       - name: Run test suite
         shell: pwsh
         run: pwsh -NoProfile -File ./tests/run-all.ps1
+      - name: Set up Python for Spec Kit
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Spec Kit 1.0.6
+        run: python -m pip install "git+https://github.com/github/spec-kit.git@v1.0.6"
+      - name: Run Spec Kit workflow E2E
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tests/spec-kit-workflow.e2e.ps1
