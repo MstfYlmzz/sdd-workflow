@@ -1,6 +1,6 @@
 # SpectaTUI Native Workflow Experiment
 
-Status: **Phase B / observability PoC**
+Status: **Phase C / runtime UX PoC**
 
 Branch: **experiment/spectatui-native-workflow**
 
@@ -304,14 +304,36 @@ SpectaTUI source is compiled locally. Then open a project with:
 The existing `spectatui`, `sdd tui`, and all existing `sdd` CLI paths
 remain available as fallback paths.
 
+## Phase C runtime UX
+
+Phase C keeps the Spec Kit workflow as the execution owner but stops treating its
+raw subprocess output as the primary SDD user interface.
+
+- `sdd-native` run/resume jobs start as background CLI jobs and return directly
+  to the Overview dashboard.
+- The Overview dashboard adds a read-only **SDD Runtime** pane between the
+  lifecycle pane and the normal coding-agent output pane when an SDD projection
+  is present.
+- Meaningful SDD events are projected to `.specify/sdd-events.json` as a capped,
+  non-authoritative event feed. Raw command-output and partial-token events are
+  deliberately excluded so the pane stays operational rather than becoming a
+  JSON/log console.
+- The existing CLI job still captures the full raw output for debugging; it is
+  no longer forced open for `sdd-native`.
+- New SpectaTUI installs default their UI config to `~/.spectatui.toml` instead
+  of creating `./.spectatui.toml` in every project. The SDD clean-worktree
+  check also ignores a legacy project-local `.spectatui.toml`.
+- The Agent Output pane remains dedicated to the selected feature's tmux coding
+  agent session. It is not repurposed as the orchestration console.
+
 ### Remaining UX gaps
 
-- token/provider usage is still available in SDD telemetry but not yet projected
-  into the rich status view
-- the CLI job popup still displays the raw streamed event lines rather than a
-  dedicated parsed SDD event pane
+- token/provider usage is still available in SDD telemetry but not yet summarized
+  in the rich runtime pane
 - workflow input collection for starting a brand-new spec from free-form user
   text is not implemented; the PoC starts from an existing tasks artifact
+- the Phase C runtime pane is intentionally read-only; pause/resume and raw-log
+  drill-down still use the workflow manager / CLI job surfaces
 - interactive Windows-terminal latency and idle-CPU measurements are still
   required before the legacy PowerShell TUI can be considered removable
 
