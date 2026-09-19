@@ -18,3 +18,5 @@ __pycache__/
 # Read-only SDD observability projection consumed by SpectaTUI.
 sdd-status.json
 sdd-status.json.tmp
+sdd-events.json
+sdd-events.json.tmp
