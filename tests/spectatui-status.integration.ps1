@@ -216,8 +216,14 @@ try {
         & git add .
         & git -c user.email=sdd-test@example.invalid -c user.name=SDD-Test commit -m baseline --quiet
         Set-Content -LiteralPath (Join-Path $fixture '.spectatui.toml') -Value 'theme = "dark"' -Encoding utf8
+        Add-Content -LiteralPath (Join-Path $fixture '.sdd/config.yaml') -Value "# local routing edit" -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $fixture '.specify/sdd-status.json') -Value '{"stage":"implement"}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $fixture '.specify/sdd-events.json') -Value '{"events":[]}' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $fixture '.specify/sdd-config.json') -Value '{"routes":[]}' -Encoding utf8
         $dirty = @(Get-GitStatusForTier0 -ProjectRoot $fixture)
         Assert-True (-not ($dirty -match '\.spectatui\.toml')) '.spectatui.toml Tier 0 clean-worktree kontrolünü bozmamalı.'
+        Assert-True (-not ($dirty -match '\.sdd/config\.yaml')) 'Routing config değişikliği Tier 0 clean-worktree kontrolünü bozmamalı.'
+        Assert-True (-not ($dirty -match '\.specify/sdd-(status|events|config)\.json')) 'SpectaTUI projection dosyaları Tier 0 clean-worktree kontrolünü bozmamalı.'
     } finally {
         Pop-Location
     }
