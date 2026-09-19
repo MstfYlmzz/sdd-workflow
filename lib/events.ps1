@@ -74,8 +74,10 @@ function Close-SddEventContext {
     if ($script:SddEventContext) {
         Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status
         if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
-            # Kapanışta generic event sonucu değil authoritative ledger durumu kazanır.
-            $null = Sync-SddSpectaStatusFromDisk -ProjectRoot ([string]$script:SddEventContext.project_root) -Stage ([string]$script:SddEventContext.stage)
+            # Kapanışta generic event/stage override değil authoritative ledger ve
+            # actionable-stage resolver kazanır. Böylece başarısız bir rerun eski
+            # completed stage'i ekranda "current" olarak sabitlemez.
+            $null = Sync-SddSpectaStatusFromDisk -ProjectRoot ([string]$script:SddEventContext.project_root)
         }
     }
     if ($script:SddEventContext -and $script:SddEventContext.tui_active -and
