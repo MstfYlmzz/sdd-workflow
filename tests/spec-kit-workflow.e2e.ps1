@@ -74,6 +74,9 @@ loop:
   max_converge_rounds: 2
 analyze:
   block_on: critical
+ui:
+  mode: auto
+  prompt_on_stage_start: false
 '@
     Set-Content -LiteralPath (Join-Path $project '.sdd/config.yaml') -Value $config -Encoding utf8
 
