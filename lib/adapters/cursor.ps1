@@ -139,7 +139,13 @@ function Read-CursorEvent {
             continue
         }
         if ($isResult) {
-            $Result.last_message = $part
+            # Cursor result events can expose both an aggregate result and a
+            # shorter nested message. Keep the most information-rich completed
+            # text instead of letting the last/shortest field overwrite it.
+            $current = [string]$Result.last_message
+            if ([string]::IsNullOrWhiteSpace($current) -or $part.Length -gt $current.Length) {
+                $Result.last_message = $part
+            }
             if ($MessageParts.Count -eq 0) { $MessageParts.Add($part) }
             if ([bool]$Result._stream_partial -and -not [string]::IsNullOrWhiteSpace($part)) {
                 Send-SddEvent -Message $part -LogPath $LogPath -Level 'stream' -Category 'assistant' -EventType 'agent_message' -Source 'provider' -Provider 'cursor' -Status 'completed'
