@@ -5,7 +5,8 @@ $repoRoot=Split-Path -Parent $PSScriptRoot
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "ASSERT FAILED: $Message"}}
 $script:mode='append';$script:tasksPath=''
 function Invoke-FakeConvergeAgent{param([hashtable]$Request)
-  if($script:mode-eq'append'){Add-Content $script:tasksPath "`n## Phase 2: Convergence`n`n- [ ] T002 Fix convergence gap in ``src/app.txt```n";return [pscustomobject]@{ok=$true;denied=@();last_message='SDD_CONVERGE_RESULT {"outcome":"tasks_appended","tasks_appended":1,"summary":"gap found"}'}}
+  if($script:mode-eq'append'){Add-Content $script:tasksPath "`n## Phase 2: Convergence`n`n- [ ] T002 Fix convergence gap in ``src/app.txt````n";return [pscustomobject]@{ok=$true;denied=@();last_message='SDD_CONVERGE_RESULT {"outcome":"tasks_appended","tasks_appended":1,"summary":"gap found"}'}}
+  if($script:mode-eq'not_converged'){return [pscustomobject]@{ok=$true;denied=@();last_message='SDD_CONVERGE_RESULT {"outcome":"not_converged","tasks_appended":0,"summary":"gap remains"}'}}
   [pscustomobject]@{ok=$true;denied=@();last_message='SDD_CONVERGE_RESULT {"outcome":"converged","tasks_appended":0,"summary":"aligned"}'}
 }
 function Resolve-Adapter{param([string]$AgentName)'Invoke-FakeConvergeAgent'}
@@ -36,6 +37,16 @@ try{
   Assert-True ($recovered.round-eq2-and$ledger.stages.converge.round-eq2) 'Contract recovery yeni converge round tüketmemeli.'
   Assert-True (@(Get-LedgerTasks $ledger|Where-Object { $_.id -eq 'T003' }).Count-eq1) 'Recovered convergence task ledgera alınmalı.'
   Assert-True (@(Get-GitStatusForTier0 -ProjectRoot $fixture).Count-eq0) 'Recovered append checkpoint sonrası working tree temiz olmalı.'
+
+  $script:mode='not_converged'
+  $ledger.stages.converge.status='stale'
+  $ledger.stages.converge.round=3
+  $ledger.stages.converge.stop_reason='tasks_appended'
+  $ledger.stages.converge | Add-Member -NotePropertyName final_verification_attempted -NotePropertyValue $false -Force
+  $final=Invoke-Converge -Config $cfg -Ledger $ledger -ProjectRoot $fixture -FinalVerification
+  Assert-True (-not$final.ok-and$final.outcome-eq'circuit_breaker') 'Final verification gap bulursa yeni repair turu açmadan circuit breaker olmalı.'
+  Assert-True ($ledger.stages.converge.round-eq3-and[bool]$ledger.stages.converge.final_verification_attempted) 'Final verification repair round sayısını artırmamalı ve tek seferlik işaretlenmeli.'
+  Assert-True (@(Get-GitStatusForTier0 -ProjectRoot $fixture).Count-eq0) 'Final verification read-only kalmalı.'
 
   Write-Host 'CONVERGE INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}
