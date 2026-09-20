@@ -311,6 +311,32 @@ function Invoke-ImplementLoop {
 
     $previousStatus = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'status' -Default 'not_started')
     $previousReason = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'stop_reason' -Default '')
+
+    # If closure previously stopped only because the provider contract was not
+    # parsed, let converge recover the already-written append/result before the
+    # normal clean-tree gate. This keeps recovery automatic from SpectaTUI "r".
+    if ($previousStatus -eq 'interrupted' -and $previousReason -eq 'contract_missing') {
+        $recoveredConverge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot
+        if (-not $recoveredConverge.ok) {
+            return [pscustomobject]@{
+                ok=$false; reason=$recoveredConverge.outcome; output=$recoveredConverge.output; batches=0
+            }
+        }
+        if ($recoveredConverge.outcome -eq 'converged') {
+            Set-ImplementStageState -Ledger $Ledger -Status 'completed' -Reason 'all_done' -Profile $baseProfile
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0
+            $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message 'sdd: complete recovered converge loop'
+            Write-SddLog -Message '[implement] converge contract recovery sonrası workflow tamamlandı' -LogPath $logPath -Level 'info'
+            return [pscustomobject]@{ok=$true;reason='completed';batches=0}
+        }
+        if ($recoveredConverge.outcome -eq 'tasks_appended') {
+            Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'convergence_tasks' -Profile $baseProfile
+            $previousStatus = 'running'
+            $previousReason = 'convergence_tasks'
+            Write-SddLog -Message "[implement] converge contract recovery $($recoveredConverge.tasks_appended) taskı geri kazandı; implement devam ediyor" -LogPath $logPath -Level 'warn'
+        }
+    }
+
     $activeBatchIds = @($(Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Default @()))
     $activeBaseline = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Default '')
     $interruptedInFlight = ($previousStatus -eq 'running' -and $previousReason -eq 'running')
