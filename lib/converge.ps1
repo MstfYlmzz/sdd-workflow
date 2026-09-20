@@ -42,18 +42,20 @@ function Test-ConvergeAppend {
         [Parameter(Mandatory)] [string] $Before,
         [Parameter(Mandatory)] [string] $After
     )
-    if ($After -eq $Before) {
+    $beforeNormalized = $Before -replace "`r`n", "`n"
+    $afterNormalized = $After -replace "`r`n", "`n"
+    if ($afterNormalized -eq $beforeNormalized) {
         return [pscustomobject]@{ok=$true;changed=$false;new_ids=@();error=$null}
     }
-    if (-not $After.StartsWith($Before, [StringComparison]::Ordinal)) {
+    if (-not $afterNormalized.StartsWith($beforeNormalized, [StringComparison]::Ordinal)) {
         return [pscustomobject]@{ok=$false;changed=$true;new_ids=@();error='tasks.md append-only değil; mevcut içerik değiştirildi.'}
     }
-    $suffix = $After.Substring($Before.Length)
+    $suffix = $afterNormalized.Substring($beforeNormalized.Length)
     if ($suffix -notmatch '(?m)^##\s+Phase\s+\d+:\s+Convergence\s*$') {
         return [pscustomobject]@{ok=$false;changed=$true;new_ids=@();error='Eklenen içerikte yeni bir Convergence fazı yok.'}
     }
-    $beforeIds = @(Get-TaskIdsFromMarkdown -Text $Before)
-    $afterIds = @(Get-TaskIdsFromMarkdown -Text $After)
+    $beforeIds = @(Get-TaskIdsFromMarkdown -Text $beforeNormalized)
+    $afterIds = @(Get-TaskIdsFromMarkdown -Text $afterNormalized)
     $duplicates = @($afterIds | Group-Object | Where-Object Count -gt 1 | ForEach-Object Name)
     if ($duplicates.Count -gt 0) {
         return [pscustomobject]@{ok=$false;changed=$true;new_ids=@();error="Tekrarlanan task ID: $($duplicates -join ', ')"}
@@ -67,6 +69,82 @@ function Test-ConvergeAppend {
         return [pscustomobject]@{ok=$false;changed=$true;new_ids=$newIds;error='Yeni Convergence task ID sırası mevcut maksimumdan büyük değil.'}
     }
     return [pscustomobject]@{ok=$true;changed=$true;new_ids=$newIds;error=$null}
+}
+
+function Get-ConvergeResultPayload {
+    param([string] $Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+
+    # Cursor can append a final background-check sentence directly after the
+    # contract JSON. Do not require the marker/JSON to occupy a whole line.
+    $matches = [regex]::Matches(
+        $Text,
+        'SDD_CONVERGE_RESULT\s+(\{.*?\})',
+        [System.Text.RegularExpressions.RegexOptions]::Singleline
+    )
+    if ($matches.Count -eq 0) { return $null }
+    return [string]$matches[$matches.Count - 1].Groups[1].Value
+}
+
+function Try-RecoverConvergeContract {
+    param(
+        [Parameter(Mandatory)] [object] $Ledger,
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [string] $TasksPath,
+        [Parameter(Mandatory)] [object] $Profile,
+        [Parameter(Mandatory)] [string] $LogPath
+    )
+
+    $stage = $Ledger.stages.converge
+    $status = [string](Get-ConvergeProperty -Object $stage -Name 'status' -Default '')
+    $reason = [string](Get-ConvergeProperty -Object $stage -Name 'stop_reason' -Default '')
+    $round = [int](Get-ConvergeProperty -Object $stage -Name 'round' -Default 0)
+    if ($status -ne 'interrupted' -or $reason -ne 'contract_missing' -or $round -le 0) {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return $null }
+
+    $payload = Get-ConvergeResultPayload -Text (Get-Content -LiteralPath $LogPath -Raw)
+    if (-not $payload) { return $null }
+    try { $report = $payload | ConvertFrom-Json -ErrorAction Stop }
+    catch { return $null }
+
+    $tasksRel = ConvertTo-GitRelativePath -ProjectRoot $ProjectRoot -Path $TasksPath
+    $changed = @(Get-ConvergeChangedPaths -ProjectRoot $ProjectRoot)
+    $forbidden = @($changed | Where-Object { $_ -ne $tasksRel })
+    if ($forbidden.Count -gt 0) { return $null }
+
+    if ([string]$report.outcome -eq 'converged') {
+        if ($changed.Count -gt 0) { return $null }
+        Set-ConvergeStageState -Ledger $Ledger -Status 'completed' -Reason 'converged' -Profile $Profile -Round $round
+        Set-ConvergeProperty -Object $Ledger.stages.converge -Name 'summary' -Value ([string]$report.summary)
+        $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $TasksPath -Message 'sdd: recover converged contract' -StateOnly
+        Send-SddEvent -Message ([string]$report.summary) -LogPath $LogPath -Category 'workflow' -EventType 'converge_contract_recovered' -Stage 'converge' -Status 'completed'
+        return [pscustomobject]@{ok=$true;outcome='converged';tasks_appended=0;summary=[string]$report.summary;round=$round;recovered=$true}
+    }
+
+    if ([string]$report.outcome -ne 'tasks_appended' -or $changed.Count -eq 0) { return $null }
+
+    $headFile = Invoke-GitCapture -ProjectRoot $ProjectRoot -Arguments @('show',"HEAD:$tasksRel") -AllowFailure
+    if ($headFile.ExitCode -ne 0) { return $null }
+    $before = [string]$headFile.Text
+    $after = Get-Content -LiteralPath $TasksPath -Raw
+    $append = Test-ConvergeAppend -Before $before -After $after
+    if (-not $append.ok -or -not $append.changed) { return $null }
+
+    $reportedCount = [int](Get-ConvergeProperty -Object $report -Name 'tasks_appended' -Default -1)
+    if ($reportedCount -ge 0 -and $reportedCount -ne @($append.new_ids).Count) { return $null }
+
+    $Ledger = Import-TasksToLedger -Ledger $Ledger -TasksMdPath $TasksPath
+    foreach ($id in @($append.new_ids)) {
+        $task = @(Get-LedgerTasks $Ledger | Where-Object id -eq $id | Select-Object -First 1)
+        if ($task) { Set-ConvergeProperty -Object $task[0] -Name 'convergence_round' -Value $round }
+    }
+    Set-ConvergeStageState -Ledger $Ledger -Status 'stale' -Reason 'tasks_appended' -Profile $Profile -Round $round
+    Set-ConvergeProperty -Object $Ledger.stages.converge -Name 'summary' -Value ([string]$report.summary)
+    $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $TasksPath -Message "sdd: recover convergence tasks round $round"
+    Send-SddEvent -Message "Converge contract recovery: $(@($append.new_ids).Count) task eklendi: $(@($append.new_ids) -join ', ')" -LogPath $LogPath -Category 'workflow' -EventType 'converge_contract_recovered' -Stage 'converge' -Status 'completed'
+    return [pscustomobject]@{ok=$true;outcome='tasks_appended';tasks_appended=@($append.new_ids).Count;task_ids=@($append.new_ids);summary=[string]$report.summary;round=$round;recovered=$true}
 }
 
 function Set-ConvergeStageState {
@@ -106,6 +184,14 @@ function Invoke-Converge {
     $loopCfg = Get-ConvergeProperty -Object $Config -Name 'loop'
     $maxRounds = [Math]::Max(1, [int](Get-ConvergeProperty -Object $loopCfg -Name 'max_converge_rounds' -Default 3))
     $currentRound = [int](Get-ConvergeProperty -Object $Ledger.stages.converge -Name 'round' -Default 0)
+    $logPath = Join-Path $paths.LogsDir 'converge.log'
+
+    # A provider may have produced a valid append/result before its final stream
+    # frame caused contract parsing to fail. Recover that exact round first; do
+    # not spend another convergence round or rerun the provider.
+    $recovered = Try-RecoverConvergeContract -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksPath $tasksPath -Profile $profile -LogPath $logPath
+    if ($null -ne $recovered) { return $recovered }
+
     if ($currentRound -ge $maxRounds) {
         $message = "Converge maksimum tur sınırına ulaştı ($maxRounds)."
         Set-ConvergeStageState -Ledger $Ledger -Status 'interrupted' -Reason 'converge_circuit_breaker' -Profile $profile -Round $currentRound -ErrorMessage $message
@@ -118,7 +204,6 @@ function Invoke-Converge {
     $before = Get-Content -LiteralPath $tasksPath -Raw
     $beforeIds = @(Get-TaskIdsFromMarkdown -Text $before)
     $round = $currentRound + 1
-    $logPath = Join-Path $paths.LogsDir 'converge.log'
     Set-ConvergeStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $profile -Round $round
     if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
         $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'converge' -Status 'running' -Profile $profile -ConvergenceRound $round -MaxConvergenceRounds $maxRounds -StopReason 'running'
@@ -160,13 +245,13 @@ function Invoke-Converge {
     }
 
     $lastMessage = [string](Get-ConvergeProperty -Object $result -Name 'last_message' -Default '')
-    $match = [regex]::Match($lastMessage, '(?m)^SDD_CONVERGE_RESULT\s+(\{[^\r\n]+\})\s*$')
-    if (-not $match.Success) {
+    $payload = Get-ConvergeResultPayload -Text $lastMessage
+    if (-not $payload) {
         $message = 'Converge çıktısında zorunlu SDD_CONVERGE_RESULT satırı yok.'
         Set-ConvergeStageState -Ledger $Ledger -Status 'interrupted' -Reason 'contract_missing' -Profile $profile -Round $round -ErrorMessage $message
         return [pscustomobject]@{ok=$false;outcome='contract_missing';tasks_appended=0;output=$message;round=$round}
     }
-    try { $report = $match.Groups[1].Value | ConvertFrom-Json -ErrorAction Stop }
+    try { $report = $payload | ConvertFrom-Json -ErrorAction Stop }
     catch {
         $message = "Converge sonuç JSON'u geçersiz: $($_.Exception.Message)"
         Set-ConvergeStageState -Ledger $Ledger -Status 'interrupted' -Reason 'contract_invalid' -Profile $profile -Round $round -ErrorMessage $message
