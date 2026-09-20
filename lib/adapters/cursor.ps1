@@ -39,6 +39,66 @@ function Get-CursorEventTexts {
     return @($texts | Select-Object -Unique)
 }
 
+function Get-CursorToolValue {
+    param([object] $Object, [string[]] $Names)
+    if ($null -eq $Object) { return '' }
+    foreach ($name in $Names) {
+        if ($Object.PSObject.Properties.Name -contains $name -and $null -ne $Object.$name) {
+            $value = $Object.$name
+            if ($value -is [string]) { return [string]$value }
+            return ($value | ConvertTo-Json -Compress -Depth 8)
+        }
+    }
+    return ''
+}
+
+function Send-CursorToolActivity {
+    param([object] $Tool, [string] $LogPath)
+    if ($null -eq $Tool) { return }
+    $name = Get-CursorToolValue -Object $Tool -Names @('name','tool_name','toolName')
+    if (-not $name) { $name = 'tool' }
+    $status = Get-CursorToolValue -Object $Tool -Names @('status','state')
+    if (-not $status) { $status = 'running' }
+    $args = Get-CursorEventValue -Object $Tool -Names @('args','arguments','input')
+    $command = Get-CursorToolValue -Object $args -Names @('command','cmd')
+    $path = Get-CursorToolValue -Object $args -Names @('file_path','path','filename','target_file')
+
+    if ($command -or $name -match '(?i)run_terminal_cmd|terminal|shell|bash|command') {
+        Send-SddEvent -Message $name -Command $command -LogPath $LogPath -Category 'command' -EventType 'command_activity' -Source 'provider' -Provider 'cursor' -Status $status
+    } elseif ($path -or $name -match '(?i)edit|write|patch|apply_patch|notebook') {
+        $message = if ($path) { $path } else { $name }
+        Send-SddEvent -Message $message -LogPath $LogPath -Category 'file_change' -EventType 'file_change' -Source 'provider' -Provider 'cursor' -Status $status
+    } else {
+        Send-SddEvent -Message $name -LogPath $LogPath -Category 'tool' -EventType 'tool_activity' -Source 'provider' -Provider 'cursor' -Status $status
+    }
+}
+
+function Send-CursorStructuredActivities {
+    param([object] $Event, [string] $LogPath)
+    if ($null -eq $Event) { return }
+    $type = [string](Get-CursorEventValue -Object $Event -Names @('type','event'))
+    if ($type -match '(?i)tool') {
+        $tool = Get-CursorEventValue -Object $Event -Names @('data','tool_call','toolCall')
+        if ($null -eq $tool) { $tool = $Event }
+        Send-CursorToolActivity -Tool $tool -LogPath $LogPath
+    }
+
+    $message = Get-CursorEventValue -Object $Event -Names @('message')
+    $content = Get-CursorEventValue -Object $message -Names @('content')
+    foreach ($block in @($content)) {
+        if ($null -eq $block -or $block -is [string]) { continue }
+        $blockType = [string](Get-CursorEventValue -Object $block -Names @('type'))
+        if ($blockType -match '(?i)tool') { Send-CursorToolActivity -Tool $block -LogPath $LogPath }
+    }
+
+    if ($type -match '(?i)thinking|reasoning') {
+        $text = Get-CursorToolValue -Object $Event -Names @('text','thinking','reasoning','content')
+        if ($text) {
+            Send-SddEvent -Message $text -LogPath $LogPath -Category 'reasoning_summary' -EventType 'reasoning' -Source 'provider' -Provider 'cursor'
+        }
+    }
+}
+
 function Read-CursorEvent {
     param(
         [string] $Line,
@@ -54,6 +114,7 @@ function Read-CursorEvent {
     $session = Get-CursorEventValue -Object $evt -Names @('session_id','sessionId','chat_id','chatId')
     if ($session) { $Result.session_id = [string]$session }
     $type = [string](Get-CursorEventValue -Object $evt -Names @('type','event'))
+    Send-CursorStructuredActivities -Event $evt -LogPath $LogPath
     if ($type -match '(?i)error|denied|permission_denied' -or
         ($evt.PSObject.Properties.Name -contains 'is_error' -and [bool]$evt.is_error)) {
         $msg = [string](Get-CursorEventValue -Object $evt -Names @('message','error','text'))
@@ -117,6 +178,8 @@ function Invoke-CursorAgent {
     }
     $parts = [System.Collections.Generic.List[string]]::new()
     $exitCode = -1
+    $agentStarted = Get-Date
+    Send-SddEvent -Message "Cursor agent başladı · $($Request.model)" -LogPath $Request.log_path -Category 'agent' -EventType 'agent_started' -Source 'adapter' -Provider 'cursor' -Status 'running'
     Push-Location ([string]$Request.cwd)
     try {
         & agent @args 2>&1 | ForEach-Object {
@@ -134,6 +197,8 @@ function Invoke-CursorAgent {
     $sawStream = $result._completed -or $parts.Count -gt 0 -or $result.session_id
     $result.ok = [bool]$sawStream -and $exitCode -eq 0 -and $result.denied.Count -eq 0
     $result.denied = @($result.denied)
+    $duration = [long]((Get-Date) - $agentStarted).TotalMilliseconds
+    Send-SddEvent -Message $(if ($result.ok) { 'Cursor agent tamamlandı' } else { 'Cursor agent başarısız' }) -LogPath $Request.log_path -Category 'agent' -EventType 'agent_completed' -Source 'adapter' -Provider 'cursor' -Status $(if ($result.ok) { 'completed' } else { 'failed' }) -DurationMs $duration
     $result.Remove('_completed'); $result.Remove('_stream_partial')
     return [pscustomobject]$result
 }
