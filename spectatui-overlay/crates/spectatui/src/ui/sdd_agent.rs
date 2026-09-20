@@ -5,12 +5,24 @@ use ratatui::Frame;
 
 use spectatui_core::speckit::SddEventSummary;
 
-use crate::app::App;
+use crate::app::{App, Pane};
 
 const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
+    let focused = app.focused_pane == Pane::SddActivity;
+    let border_style = if focused {
+        theme.border_focused
+    } else {
+        theme.border_unfocused
+    };
+    let title_style = if focused {
+        theme.title_focused
+    } else {
+        theme.title_unfocused
+    };
+
     let provider = app
         .project
         .sdd_status
@@ -40,23 +52,21 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let title = Line::from(vec![
-        Span::styled("─┤ ", theme.border_unfocused),
-        Span::styled(
-            format!("{marker} SDD Activity · {provider}"),
-            theme.title_unfocused,
-        ),
-        Span::styled(" ├", theme.border_unfocused),
+        Span::styled("─┤ ", border_style),
+        Span::styled(format!("{marker} SDD Activity · {provider}"), title_style),
+        Span::styled(" ├", border_style),
     ]);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme.border_unfocused)
+        .border_style(border_style)
         .title(title)
         .padding(super::PANEL_PADDING);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if inner.height == 0 || inner.width == 0 {
+        app.sdd_activity_scroll_max.set(0);
         return;
     }
 
@@ -89,17 +99,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let mut lines: Vec<Line> = relevant
-        .iter()
-        .rev()
-        .take((inner.height as usize).saturating_mul(4).max(12))
-        .rev()
-        .map(|event| event_line(event, app, inner.width as usize))
-        .collect();
-
-    let available = inner.height as usize;
-    if lines.len() > available {
-        lines = lines.split_off(lines.len() - available);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for event in relevant {
+        lines.extend(event_lines(event, app, inner.width as usize));
     }
 
     if lines.is_empty() {
@@ -108,13 +110,22 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             " Waiting for normalized SDD provider activity…"
         };
-        lines.push(Line::from(Span::styled(state, theme.faint_style)));
+        lines.push(Line::from(Span::styled(state.to_string(), theme.faint_style)));
     }
 
-    frame.render_widget(Paragraph::new(lines).style(theme.base), inner);
+    let available = inner.height as usize;
+    let max_scroll = lines.len().saturating_sub(available);
+    app.sdd_activity_scroll_max
+        .set(max_scroll.min(u16::MAX as usize) as u16);
+    let back = (app.sdd_activity_scroll as usize).min(max_scroll);
+    let end = lines.len().saturating_sub(back);
+    let start = end.saturating_sub(available);
+    let visible: Vec<Line<'static>> = lines[start..end].to_vec();
+
+    frame.render_widget(Paragraph::new(visible).style(theme.base), inner);
 }
 
-fn event_line(event: &SddEventSummary, app: &App, width: usize) -> Line<'static> {
+fn event_lines(event: &SddEventSummary, app: &App, width: usize) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let time = clock(&event.timestamp);
     let failed = event.severity == "error"
@@ -167,12 +178,20 @@ fn event_line(event: &SddEventSummary, app: &App, width: usize) -> Line<'static>
             single_line(if event.command.is_empty() { &event.message } else { &event.command }),
             if failed { theme.warn_style } else if completed { theme.good_style } else { theme.accent_style },
         ),
-        "tool" => (
-            if failed { "✗" } else if completed { "✓" } else { "◇" },
-            "tool",
-            single_line(&event.message),
-            if failed { theme.warn_style } else { theme.dim_style },
-        ),
+        "tool" => {
+            let body = single_line(&event.message);
+            let useful = if body.is_empty() || body.eq_ignore_ascii_case("tool") {
+                "working".to_string()
+            } else {
+                body
+            };
+            (
+                if failed { "✗" } else if completed { "✓" } else { "◇" },
+                "tool",
+                useful,
+                if failed { theme.warn_style } else { theme.dim_style },
+            )
+        },
         "usage" => (
             "·",
             "usage",
@@ -193,16 +212,88 @@ fn event_line(event: &SddEventSummary, app: &App, width: usize) -> Line<'static>
         ),
     };
 
-    let prefix_width = 8 + glyph.chars().count() + 1 + label.chars().count() + 1;
-    let body_width = width.saturating_sub(prefix_width + duration.chars().count());
+    let prefix = format!(" {time} {glyph} {label:<8}");
+    let prefix_width = prefix.chars().count();
+    let first_body_width = width
+        .saturating_sub(prefix_width)
+        .saturating_sub(duration.chars().count())
+        .max(1);
+    let continuation_width = width.saturating_sub(prefix_width).max(1);
+    let wrapped = wrap_text(&body, first_body_width, continuation_width);
 
-    Line::from(vec![
-        Span::styled(format!(" {time} "), theme.faint_style),
-        Span::styled(format!("{glyph} "), style),
-        Span::styled(format!("{label:<8}"), theme.dim_style),
-        Span::styled(clip(&body, body_width), style),
-        Span::styled(duration, theme.faint_style),
-    ])
+    let mut out = Vec::with_capacity(wrapped.len().max(1));
+    if wrapped.is_empty() {
+        out.push(Line::from(vec![
+            Span::styled(prefix, theme.faint_style),
+            Span::styled(duration, theme.faint_style),
+        ]));
+        return out;
+    }
+
+    for (index, part) in wrapped.into_iter().enumerate() {
+        if index == 0 {
+            out.push(Line::from(vec![
+                Span::styled(format!(" {time} "), theme.faint_style),
+                Span::styled(format!("{glyph} "), style),
+                Span::styled(format!("{label:<8}"), theme.dim_style),
+                Span::styled(part, style),
+                Span::styled(duration.clone(), theme.faint_style),
+            ]));
+        } else {
+            out.push(Line::from(vec![
+                Span::styled(" ".repeat(prefix_width), theme.faint_style),
+                Span::styled(part, style),
+            ]));
+        }
+    }
+    out
+}
+
+fn wrap_text(text: &str, first_width: usize, continuation_width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut width = first_width.max(1);
+
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        let sep = usize::from(!current.is_empty());
+        if current.chars().count() + sep + word_len <= width {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+            continue;
+        }
+
+        if !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+            width = continuation_width.max(1);
+        }
+
+        if word_len <= width {
+            current.push_str(word);
+            continue;
+        }
+
+        let mut chunk = String::new();
+        for ch in word.chars() {
+            if chunk.chars().count() >= width {
+                out.push(std::mem::take(&mut chunk));
+                width = continuation_width.max(1);
+            }
+            chunk.push(ch);
+        }
+        current = chunk;
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
 }
 
 fn clock(timestamp: &str) -> String {
@@ -226,18 +317,4 @@ fn duration_text(ms: u64) -> String {
 
 fn single_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn clip(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let count = text.chars().count();
-    if count <= width {
-        return text.to_string();
-    }
-    if width <= 1 {
-        return "…".to_string();
-    }
-    text.chars().take(width - 1).collect::<String>() + "…"
 }
