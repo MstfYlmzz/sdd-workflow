@@ -91,6 +91,8 @@ pub struct DividerHover {
 pub enum Pane {
     FeatureList,
     Workflow,
+    SddRuntime,
+    SddActivity,
     AgentOutput,
     SpecBrowser,
     Constitution,
@@ -292,6 +294,12 @@ pub struct App {
     pub spec_scroll: u16,
     /// Max `spec_scroll` for the doc view rendered last frame (`total_lines - viewport`).
     pub doc_scroll_max: Cell<u16>,
+    /// Lines back from the live tail in the SDD runtime/activity panes.
+    /// Zero means follow the newest output.
+    pub sdd_runtime_scroll: u16,
+    pub sdd_activity_scroll: u16,
+    pub sdd_runtime_scroll_max: Cell<u16>,
+    pub sdd_activity_scroll_max: Cell<u16>,
     pub theme_mode: ThemeMode,
     pub accent: Accent,
     pub theme: Theme,
@@ -436,6 +444,10 @@ impl App {
             spec_tab: SpecTab::Spec,
             spec_scroll: 0,
             doc_scroll_max: Cell::new(0),
+            sdd_runtime_scroll: 0,
+            sdd_activity_scroll: 0,
+            sdd_runtime_scroll_max: Cell::new(0),
+            sdd_activity_scroll_max: Cell::new(0),
             theme_mode: mode,
             accent,
             theme,
@@ -743,9 +755,13 @@ impl App {
     pub fn cycle_tab_forward(&mut self) {
         match self.screen {
             Screen::Dashboard => {
+                let has_sdd = self.project.sdd_status.is_some();
                 self.focused_pane = match self.focused_pane {
                     Pane::FeatureList => Pane::Workflow,
+                    Pane::Workflow if has_sdd => Pane::SddRuntime,
                     Pane::Workflow => Pane::AgentOutput,
+                    Pane::SddRuntime => Pane::SddActivity,
+                    Pane::SddActivity => Pane::AgentOutput,
                     Pane::AgentOutput => Pane::FeatureList,
                     other => other,
                 };
@@ -761,9 +777,13 @@ impl App {
     pub fn cycle_tab_backward(&mut self) {
         match self.screen {
             Screen::Dashboard => {
+                let has_sdd = self.project.sdd_status.is_some();
                 self.focused_pane = match self.focused_pane {
                     Pane::FeatureList => Pane::AgentOutput,
                     Pane::Workflow => Pane::FeatureList,
+                    Pane::SddRuntime => Pane::Workflow,
+                    Pane::SddActivity => Pane::SddRuntime,
+                    Pane::AgentOutput if has_sdd => Pane::SddActivity,
                     Pane::AgentOutput => Pane::Workflow,
                     other => other,
                 };
@@ -796,6 +816,38 @@ impl App {
 
     pub fn cli_scroll_up(&mut self) {
         self.cli_scroll = self.cli_scroll.saturating_sub(1);
+    }
+
+    /// Scroll SDD panes relative to their live tail: Up goes to older output,
+    /// Down returns toward the newest output. This keeps live-follow natural.
+    pub fn sdd_scroll_older(&mut self) {
+        match self.focused_pane {
+            Pane::SddRuntime => {
+                self.sdd_runtime_scroll = self
+                    .sdd_runtime_scroll
+                    .saturating_add(1)
+                    .min(self.sdd_runtime_scroll_max.get());
+            }
+            Pane::SddActivity => {
+                self.sdd_activity_scroll = self
+                    .sdd_activity_scroll
+                    .saturating_add(1)
+                    .min(self.sdd_activity_scroll_max.get());
+            }
+            _ => {}
+        }
+    }
+
+    pub fn sdd_scroll_newer(&mut self) {
+        match self.focused_pane {
+            Pane::SddRuntime => {
+                self.sdd_runtime_scroll = self.sdd_runtime_scroll.saturating_sub(1);
+            }
+            Pane::SddActivity => {
+                self.sdd_activity_scroll = self.sdd_activity_scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
     }
 
     /// Show the CLI output popup for a freshly spawned job, resetting scroll.
@@ -1319,7 +1371,21 @@ impl App {
     }
 
     pub fn refresh_project(&mut self) {
-        if let Ok(project) = Project::discover(std::path::Path::new(&self.project_path)) {
+        if let Ok(mut project) = Project::discover(std::path::Path::new(&self.project_path)) {
+            // Projection files are atomically replaced by the PowerShell side. A file
+            // watcher can observe the tiny replace window and rediscover while one
+            // projection is temporarily absent. Keep the last good projection instead
+            // of flashing back to artifact-derived task counts/stages.
+            if project.sdd_status.is_none() {
+                project.sdd_status = self.project.sdd_status.clone();
+            }
+            if project.sdd_events.is_empty() && !self.project.sdd_events.is_empty() {
+                project.sdd_events = self.project.sdd_events.clone();
+            }
+            if project.sdd_config.is_none() {
+                project.sdd_config = self.project.sdd_config.clone();
+            }
+
             self.project = project;
             if self.feature_index >= self.project.features.len() {
                 self.feature_index = self.project.features.len().saturating_sub(1);
