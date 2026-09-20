@@ -290,13 +290,30 @@ function Update-SddSpectaRuntimeActivity {
     $doc.runtime | Add-Member -NotePropertyName agent_started_at_ms -NotePropertyValue $agentStarted -Force
     $doc.runtime | Add-Member -NotePropertyName last_activity_at_ms -NotePropertyValue $nowMs -Force
 
-    if ($RefreshDelta -or $newActivity) {
+    # Git delta calculation can be expensive for vendor-heavy repos. Activity itself
+    # is written immediately, while diff stats are sampled at most once every 2s
+    # (agent completion always forces a final sample).
+    $shouldRefreshDelta = [bool]$RefreshDelta
+    if ($shouldRefreshDelta) {
+        if (-not (Get-Variable -Scope Script -Name SddSpectaLastDeltaAt -ErrorAction SilentlyContinue)) {
+            $script:SddSpectaLastDeltaAt = @{}
+        }
+        $lastDelta = if ($script:SddSpectaLastDeltaAt.ContainsKey($ProjectRoot)) {
+            [long]$script:SddSpectaLastDeltaAt[$ProjectRoot]
+        } else { 0 }
+        $forceFinal = ($eventType -eq 'agent_completed')
+        if (-not $forceFinal -and ($nowMs - $lastDelta) -lt 2000) {
+            $shouldRefreshDelta = $false
+        }
+    }
+    if ($shouldRefreshDelta) {
         $delta = Get-SddSpectaGitDelta -ProjectRoot $ProjectRoot
         $doc.runtime | Add-Member -NotePropertyName active_baseline -NotePropertyValue $delta.baseline -Force
         $doc.runtime | Add-Member -NotePropertyName changed_files -NotePropertyValue $delta.changed_files -Force
         $doc.runtime | Add-Member -NotePropertyName additions -NotePropertyValue $delta.additions -Force
         $doc.runtime | Add-Member -NotePropertyName deletions -NotePropertyValue $delta.deletions -Force
         $doc.runtime | Add-Member -NotePropertyName file_changes -NotePropertyValue @($delta.files) -Force
+        $script:SddSpectaLastDeltaAt[$ProjectRoot] = $nowMs
     }
 
     $doc.updated_at = (Get-Date).ToUniversalTime().ToString('o')
@@ -416,8 +433,8 @@ function Write-SddSpectaEvent {
     $doc | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding utf8 -NoNewline
     Move-Item -LiteralPath $tmp -Destination $path -Force
 
-    $refreshDelta = $category -in @('command','gate','file_change','tool') -or
-                    $eventType -in @('agent_started','agent_completed','agent_message')
+    $refreshDelta = $category -eq 'file_change' -or
+                    $eventType -in @('agent_started','agent_completed','agent_message','gate_completed')
     $null = Update-SddSpectaRuntimeActivity -ProjectRoot $ProjectRoot -Event $Event -RefreshDelta:$refreshDelta
     return [pscustomobject]$entry
 }
