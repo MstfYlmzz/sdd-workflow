@@ -7,3 +7,18 @@ feature.json
 
 # Per-machine extension config overrides.
 extensions/*/local-config.yml
+
+# Resumable workflow engine run state is machine-local pipeline state.
+workflows/runs/
+
+# Python bytecode created when Spec Kit loads project-local workflow steps.
+__pycache__/
+*.py[cod]
+
+# Read-only SDD observability projection consumed by SpectaTUI.
+sdd-status.json
+sdd-status.json.tmp
+sdd-events.json
+sdd-events.json.tmp
+sdd-config.json
+sdd-config.json.tmp

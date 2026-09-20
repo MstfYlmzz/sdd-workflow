@@ -23,10 +23,14 @@ $tests = @(
     'agent-selection.integration.ps1',
     'analyze.integration.ps1',
     'converge.integration.ps1',
+    'convergence-loop.integration.ps1',
     'loop.integration.ps1',
     'retry.integration.ps1',
     'revalidate.integration.ps1',
-    'final-gate.integration.ps1'
+    'interrupted-candidate.integration.ps1',
+    'final-gate.integration.ps1',
+    'spectatui-workflow.integration.ps1',
+    'spectatui-status.integration.ps1'
 )
 foreach ($test in $tests) {
     Write-Host "`n=== $test ===" -ForegroundColor Cyan

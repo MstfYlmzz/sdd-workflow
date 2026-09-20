@@ -136,7 +136,12 @@ function Set-SddStageProfile {
     try { $null = Read-SddConfig -ConfigPath $tmp }
     catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw "Yeni config doğrulanamadı: $($_.Exception.Message)" }
     Move-Item -LiteralPath $tmp -Destination $ConfigPath -Force
-    return (Read-SddConfig -ConfigPath $ConfigPath)
+    $updated = Read-SddConfig -ConfigPath $ConfigPath
+    if (Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue) {
+        $projectRoot = Split-Path -Parent (Split-Path -Parent $ConfigPath)
+        $null = Write-SddSpectaConfig -ProjectRoot $projectRoot
+    }
+    return $updated
 }
 
 function Update-SddConfigCompatibility {

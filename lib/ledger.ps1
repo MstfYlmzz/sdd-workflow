@@ -328,6 +328,16 @@ function Import-TasksToLedger {
     }
 
     $Ledger.tasks = @($merged | Sort-Object { [int]($_.id -replace '\D','') })
+
+    # tasks.md hangi Spec Kit feature klasörüne aitse ledger kimliğini onunla
+    # eşleştir. Eski projelerde sdd init repo adını spec_id olarak yazmış
+    # olabilir; ilk task importunda bu değer kendini düzeltir.
+    $featureDir = Split-Path -Parent $TasksMdPath
+    $featureId = Split-Path -Leaf $featureDir
+    if (-not [string]::IsNullOrWhiteSpace($featureId)) {
+        $Ledger.spec_id = $featureId
+    }
+
     return $Ledger
 }
 

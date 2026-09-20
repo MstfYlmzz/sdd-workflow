@@ -137,6 +137,9 @@ function Save-LoopCheckpoint {
 
     $paths = Get-SddPaths -ProjectRoot $ProjectRoot
     Write-Ledger -Ledger $Ledger -StatePath $paths.State
+    if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger
+    }
     if (-not $StateOnly) { Render-TasksMd -Ledger $Ledger -OutPath $TasksMdPath }
 
     $stateRel = ConvertTo-GitRelativePath -ProjectRoot $ProjectRoot -Path $paths.State
@@ -306,11 +309,60 @@ function Invoke-ImplementLoop {
     $agentFn = Resolve-Adapter -AgentName ([string](Get-WorkflowProperty -Object $baseProfile -Name 'agent'))
     $logPath = Join-Path $paths.LogsDir 'implement.log'
 
+    $previousStatus = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'status' -Default 'not_started')
     $previousReason = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'stop_reason' -Default '')
+
+    # If closure previously stopped only because the provider contract was not
+    # parsed, let converge recover the already-written append/result before the
+    # normal clean-tree gate. This keeps recovery automatic from SpectaTUI "r".
+    if ($previousStatus -eq 'interrupted' -and $previousReason -eq 'contract_missing') {
+        $recoveredConverge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot
+        if (-not $recoveredConverge.ok) {
+            return [pscustomobject]@{
+                ok=$false; reason=$recoveredConverge.outcome; output=$recoveredConverge.output; batches=0
+            }
+        }
+        if ($recoveredConverge.outcome -eq 'converged') {
+            Set-ImplementStageState -Ledger $Ledger -Status 'completed' -Reason 'all_done' -Profile $baseProfile
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0
+            $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message 'sdd: complete recovered converge loop'
+            Write-SddLog -Message '[implement] converge contract recovery sonrası workflow tamamlandı' -LogPath $logPath -Level 'info'
+            return [pscustomobject]@{ok=$true;reason='completed';batches=0}
+        }
+        if ($recoveredConverge.outcome -eq 'tasks_appended') {
+            Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'convergence_tasks' -Profile $baseProfile
+            $previousStatus = 'running'
+            $previousReason = 'convergence_tasks'
+            Write-SddLog -Message "[implement] converge contract recovery $($recoveredConverge.tasks_appended) taskı geri kazandı; implement devam ediyor" -LogPath $logPath -Level 'warn'
+        }
+    }
+
+    $activeBatchIds = @($(Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Default @()))
+    $activeBaseline = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Default '')
+    $interruptedInFlight = ($previousStatus -eq 'running' -and $previousReason -eq 'running')
+    $recoverableActiveBatch = ($activeBatchIds.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($activeBaseline) -and
+                               ($interruptedInFlight -or $previousReason -eq 'agent_interrupted'))
     $dirty = @(Get-GitStatusForTier0 -ProjectRoot $ProjectRoot)
-    $mayResumeDirty = $previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')
+    $mayResumeDirty = $recoverableActiveBatch -or $previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')
     if ($dirty.Count -gt 0 -and -not $mayResumeDirty) {
         throw "Implement loop temiz çalışma ağacıyla başlamalı. Önce commit/stash yap: $($dirty -join ' | ')"
+    }
+
+    # If an external provider finished and committed the active batch but the
+    # orchestrator died before validation/checkpointing, prefer validating that
+    # existing candidate over asking the provider to implement the same work again.
+    $autoRevalidateCandidate = $false
+    if (-not $RevalidateFrom -and $recoverableActiveBatch -and $dirty.Count -eq 0) {
+        $headNow = Get-GitBaseline -ProjectRoot $ProjectRoot
+        if ($headNow -and $headNow -ne $activeBaseline) {
+            $ancestor = Invoke-GitCapture -ProjectRoot $ProjectRoot -Arguments @('merge-base','--is-ancestor',$activeBaseline,$headNow) -AllowFailure
+            if ($ancestor.ExitCode -eq 0) {
+                $RevalidateFrom = $activeBaseline
+                $CandidateCommit = $headNow
+                $autoRevalidateCandidate = $true
+                Write-SddLog -Message "[implement] yarıda kalan batch için mevcut candidate bulundu; agent tekrar çağrılmadan doğrulanacak: $($headNow.Substring(0,8))" -LogPath $logPath -Level 'warn'
+            }
+        }
     }
 
     # Validator recovery agentsız kalmalıdır. Normal implement girişinde ise
@@ -345,6 +397,12 @@ function Invoke-ImplementLoop {
     $resumeSession = if ($previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')) {
         [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Default '')
     } else { '' }
+    $recoveryBaseline = if ($recoverableActiveBatch) { $activeBaseline } else { '' }
+    # PowerShell enumerates arrays emitted by an if-expression. Wrap the whole
+    # expression so a single active task remains Object[] instead of collapsing
+    # into a scalar string (which has no .Count under StrictMode).
+    $recoveryBatchIds = @(if ($recoverableActiveBatch) { $activeBatchIds } else { @() })
+    $recoveringInFlight = $recoverableActiveBatch
 
     while ($true) {
         $pending = @(Get-LedgerTasks $Ledger | Where-Object { $_.status -eq 'pending' })
@@ -370,8 +428,15 @@ function Invoke-ImplementLoop {
 
             $enableConverge = [bool](Get-WorkflowProperty -Object $loopCfg -Name 'enable_converge' -Default $false)
             if ($enableConverge) {
-                Write-SddLog -Message '[implement] final gate geçti; converge başlıyor' -LogPath $logPath -Level 'info'
-                $converge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot
+                $maxConvergeRounds = [Math]::Max(1, [int](Get-WorkflowProperty -Object $loopCfg -Name 'max_converge_rounds' -Default 3))
+                $currentConvergeRound = [int](Get-WorkflowProperty -Object $Ledger.stages.converge -Name 'round' -Default 0)
+                $finalVerification = ($currentConvergeRound -ge $maxConvergeRounds)
+                if ($finalVerification) {
+                    Write-SddLog -Message "[implement] final gate geçti; converge düzeltme bütçesi dolu ($currentConvergeRound/$maxConvergeRounds), final read-only doğrulama başlıyor" -LogPath $logPath -Level 'info'
+                } else {
+                    Write-SddLog -Message '[implement] final gate geçti; converge başlıyor' -LogPath $logPath -Level 'info'
+                }
+                $converge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot -FinalVerification:$finalVerification
                 if (-not $converge.ok) {
                     Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason $converge.outcome -Profile $baseProfile
                     Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $converge.output
@@ -391,7 +456,16 @@ function Invoke-ImplementLoop {
             return [pscustomobject]@{ ok = $true; reason = 'completed'; batches = $attemptedBatches }
         }
 
-        $batch = @(Get-PendingBatch -Ledger $Ledger -BatchSize $batchSize)
+        if ($recoveringInFlight -and @($recoveryBatchIds).Count -gt 0) {
+            $batch = @(
+                foreach ($id in $recoveryBatchIds) {
+                    $match = @(Get-LedgerTasks $Ledger | Where-Object { $_.id -eq $id -and $_.status -eq 'pending' } | Select-Object -First 1)
+                    if ($match.Count -gt 0) { $match[0] }
+                }
+            )
+        } else {
+            $batch = @(Get-PendingBatch -Ledger $Ledger -BatchSize $batchSize)
+        }
         if ($batch.Count -eq 0) {
             $detail = foreach ($task in $pending) {
                 $deps = @($task.depends_on | Where-Object {
@@ -412,6 +486,10 @@ function Invoke-ImplementLoop {
             $attemptedBatches++
             $ids = @($batch.id) -join ', '
             $candidateSha = Resolve-RevalidationCommit -ProjectRoot $ProjectRoot -Baseline $RevalidateFrom -CandidateCommit $CandidateCommit
+            if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+                $revalidateAttempt = [Math]::Max(1, [int](@($batch | ForEach-Object { [int]$_.attempts } | Measure-Object -Maximum).Maximum))
+                $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber $attemptedBatches -Attempt $revalidateAttempt -MaxAttempts $maxAttempts -Profile $baseProfile -StopReason 'revalidating'
+            }
             Write-SddLog -Message "[implement] mevcut candidate yeniden doğrulanıyor: $ids | $($candidateSha.Substring(0, 8))" -LogPath $logPath -Level 'info'
 
             $validation = Invoke-BatchValidation -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot `
@@ -438,6 +516,11 @@ function Invoke-ImplementLoop {
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $null
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $null
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Value @()
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Value $null
+            $recoveringInFlight = $false
+            $recoveryBatchIds = @()
+            $recoveryBaseline = ''
             Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $baseProfile
             $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message "sdd: revalidate tasks $ids"
             Write-SddLog -Message "[implement] yeniden doğrulama geçti: $ids @ $($candidateSha.Substring(0, 8))" -LogPath $logPath -Level 'info'
@@ -453,8 +536,20 @@ function Invoke-ImplementLoop {
         $attemptedBatches++
         $nextAttempt = (@($batch | ForEach-Object { [int]$_.attempts } | Measure-Object -Maximum).Maximum) + 1
         $profile = if ($nextAttempt -ge $escalateAt) { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt $nextAttempt } else { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt 1 }
-        $baseline = Get-GitBaseline -ProjectRoot $ProjectRoot
+        $baseline = if ($recoveringInFlight -and $recoveryBaseline) { $recoveryBaseline } else { Get-GitBaseline -ProjectRoot $ProjectRoot }
         $ids = @($batch.id) -join ', '
+
+        # Persist in-flight ownership BEFORE the external agent starts. If the
+        # terminal/process is killed, the next invocation can distinguish an
+        # interrupted implement batch from unrelated user WIP and resume safely.
+        Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $profile -SessionId $resumeSession
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Value @($batch.id)
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Value $baseline
+        Write-Ledger -Ledger $Ledger -StatePath $paths.State
+
+        if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
+            $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber $attemptedBatches -Attempt $nextAttempt -MaxAttempts $maxAttempts -Profile $profile -StopReason 'running'
+        }
         Write-SddLog -Message "[implement] batch ${attemptedBatches}: $ids | attempt=$nextAttempt | $($profile.agent)/$($profile.model)/$($profile.effort)" -LogPath $logPath -Level 'info'
 
         $prompt = Get-ImplementPrompt -Batch $batch -ProjectRoot $ProjectRoot -Baseline $baseline -PreviousFailure $retryFailure
@@ -464,7 +559,11 @@ function Invoke-ImplementLoop {
             stream_partial = (Test-SddPartialStreaming)
         }
         if ($resumeSession) { $request.resume_session = $resumeSession }
+        if ($recoveringInFlight) {
+            Write-SddLog -Message "[implement] yarıda kesilmiş batch geri yükleniyor: $ids | baseline=$($baseline.Substring(0, [Math]::Min(8, $baseline.Length)))" -LogPath $logPath -Level 'warn'
+        }
         $agentResult = & $agentFn -Request $request
+        $recoveringInFlight = $false
         if ($agentResult.session_id) {
             $resumeSession = [string]$agentResult.session_id
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $resumeSession
@@ -527,6 +626,8 @@ function Invoke-ImplementLoop {
         $retryFailure = $null
         $resumeSession = '' # her başarılı batch'ten sonra temiz context
         Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $null
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Value @()
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Value $null
 
         if ($ObserveEvery -gt 0 -and ($completedThisRun % $ObserveEvery) -eq 0) {
             Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason 'observe_pause' -Profile $profile

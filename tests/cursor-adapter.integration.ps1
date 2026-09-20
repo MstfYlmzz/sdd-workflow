@@ -36,7 +36,10 @@ try {
     Assert-True ((Convert-EffortToCursor -Effort high -Model auto) -eq 'auto') 'Cursor effort model adını uydurmamalı.'
 
     $events=[Collections.Generic.List[object]]::new()
-    function global:Send-SddEvent { param($Message,$EventType,$Category,$Provider,$LogPath,$Level,$Source) $events.Add([pscustomobject]@{message=$Message;event_type=$EventType}) }
+    function global:Send-SddEvent {
+        param($Message,$EventType,$Category,$Provider,$LogPath,$Level,$Source,$Command,$Status,$DurationMs,$Usage,$Metadata)
+        $events.Add([pscustomobject]@{message=$Message;event_type=$EventType;category=$Category;command=$Command;status=$Status})
+    }
     $stream=[ordered]@{session_id=$null;denied=[Collections.Generic.List[string]]::new();last_message=$null;usage=$null;_completed=$false;_stream_partial=$true}
     $parts=[Collections.Generic.List[string]]::new()
     Read-CursorEvent '{"type":"assistant","timestamp_ms":1,"message":{"content":[{"type":"text","text":"Planning the "}]}}' $stream $parts ''
@@ -45,6 +48,16 @@ try {
     Read-CursorEvent '{"type":"assistant","message":{"content":[{"type":"text","text":"Planning the implementation"}]}}' $stream $parts ''
     Assert-True (($events.message-join'')-eq'Planning the implementation'-and$events.Count-eq2) 'Yalnız gerçek Cursor deltaları yayınlanmalı; flush tekrarları atlanmalı.'
     Assert-True ($stream.last_message-eq'Planning the implementation') 'Cursor deltaları boşluksuz birleştirilmeli.'
+
+    $completed=[ordered]@{session_id=$null;denied=[Collections.Generic.List[string]]::new();last_message=$null;usage=$null;_completed=$false;_stream_partial=$true}
+    $completedParts=[Collections.Generic.List[string]]::new()
+    Read-CursorEvent '{"type":"result","result":"Detailed report\nSDD_CONVERGE_RESULT {\"outcome\":\"tasks_appended\"}","message":{"content":[{"type":"text","text":"All tests passed."}]}}' $completed $completedParts ''
+    Assert-True ($completed.last_message -match 'SDD_CONVERGE_RESULT') 'Cursor result eventindeki aggregate mesaj kısa nested mesaj tarafından ezilmemeli.'
+
+    Read-CursorEvent '{"type":"tool_call","data":{"callId":"c1","name":"run_terminal_cmd","status":"running","args":{"command":"node --test tests/a.test.js"}}}' $stream $parts ''
+    Read-CursorEvent '{"type":"tool_call","data":{"callId":"c2","name":"edit_file","status":"completed","args":{"path":"src/app.js"}}}' $stream $parts ''
+    Assert-True (@($events | Where-Object { $_.category -eq 'command' -and $_.command -eq 'node --test tests/a.test.js' }).Count -eq 1) 'Cursor terminal toolu structured command event olmalı.'
+    Assert-True (@($events | Where-Object { $_.category -eq 'file_change' -and $_.message -eq 'src/app.js' }).Count -eq 1) 'Cursor edit toolu structured file event olmalı.'
     Write-Host 'CURSOR ADAPTER INTEGRATION OK' -ForegroundColor Green
 } finally {
     Remove-Item Function:\global:agent -ErrorAction SilentlyContinue

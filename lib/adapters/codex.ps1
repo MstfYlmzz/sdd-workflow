@@ -24,6 +24,26 @@
 
 Set-StrictMode -Version Latest
 
+function Get-CodexFileChangeText {
+    param([object] $Item)
+    if ($null -eq $Item) { return 'file change' }
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in @('path','file_path','filename')) {
+        if ($Item.PSObject.Properties.Name -contains $name -and $Item.$name) { $paths.Add([string]$Item.$name) }
+    }
+    if ($Item.PSObject.Properties.Name -contains 'changes') {
+        foreach ($change in @($Item.changes)) {
+            if ($null -eq $change) { continue }
+            foreach ($name in @('path','file_path','filename')) {
+                if ($change.PSObject.Properties.Name -contains $name -and $change.$name) { $paths.Add([string]$change.$name); break }
+            }
+        }
+    }
+    $unique = @($paths | Select-Object -Unique)
+    if ($unique.Count -eq 0) { return 'file change' }
+    return ($unique -join ', ')
+}
+
 function Invoke-CodexAgent {
     param([Parameter(Mandatory)] [hashtable] $Request)
 
@@ -77,6 +97,8 @@ function Invoke-CodexAgent {
     $script:__sawTurn = $false
     $cliExitCode = 0
     $messageParts = [System.Collections.Generic.List[string]]::new()
+    $agentStarted = Get-Date
+    Send-SddEvent -Message "Codex agent başladı · $($Request.model)/$($Request.effort)" -LogPath $Request.log_path -Category 'agent' -EventType 'agent_started' -Source 'adapter' -Provider 'codex' -Status 'running'
 
     # codex'i çalıştır, JSONL'i satır satır CANLI işle (pipeline streaming)
     & codex @codexArgs 2>&1 | ForEach-Object {
@@ -102,6 +124,8 @@ function Invoke-CodexAgent {
 
     $result.ok = [bool]$script:__sawTurn -and ($result.denied.Count -eq 0)
     $result.denied = @($result.denied)
+    $duration = [long]((Get-Date) - $agentStarted).TotalMilliseconds
+    Send-SddEvent -Message $(if ($result.ok) { 'Codex agent tamamlandı' } else { 'Codex agent başarısız' }) -LogPath $Request.log_path -Category 'agent' -EventType 'agent_completed' -Source 'adapter' -Provider 'codex' -Status $(if ($result.ok) { 'completed' } else { 'failed' }) -DurationMs $duration
     Remove-Variable -Scope script -Name __sawTurn -ErrorAction SilentlyContinue
     return [pscustomobject]$result
 }
@@ -160,7 +184,10 @@ function Read-CodexEvent {
                 $summary = if ($evt.item.PSObject.Properties.Name -contains 'text') { [string]$evt.item.text } elseif ($evt.item.PSObject.Properties.Name -contains 'summary') { [string]$evt.item.summary } else { 'Reasoning adımı tamamlandı' }
                 Send-SddEvent -Message $summary -LogPath $LogPath -Category 'reasoning_summary' -EventType 'reasoning' -Source 'provider' -Provider 'codex'
             }
-            elseif ($evt.item -and $evt.item.type -in @('file_change','mcp_tool_call','web_search','plan_update')) {
+            elseif ($evt.item -and $evt.item.type -eq 'file_change') {
+                Send-SddEvent -Message (Get-CodexFileChangeText -Item $evt.item) -LogPath $LogPath -Category 'file_change' -EventType 'file_change' -Source 'provider' -Provider 'codex' -Status ([string]$evt.item.status)
+            }
+            elseif ($evt.item -and $evt.item.type -in @('mcp_tool_call','web_search','plan_update')) {
                 Send-SddEvent -Message ([string]$evt.item.type) -LogPath $LogPath -Category 'tool' -EventType ([string]$evt.item.type) -Source 'provider' -Provider 'codex' -Status ([string]$evt.item.status)
             }
         }

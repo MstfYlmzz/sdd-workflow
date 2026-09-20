@@ -2,25 +2,30 @@
 <# SDD workflow komut satırı giriş noktası.
    Argümanlar bilerek PowerShell parameter binder'a bırakılmaz. Global shim'den
    aktarılan çok satırlı -Prompt değeri Object[] olabilir. #>
-$supportedCommands=@('init','upgrade','self-update','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks')
+$supportedCommands=@('init','upgrade','self-update','spectatui','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage','workflow-resume','recover-implement')
 $Command=if($args.Count){[string]$args[0]}else{''}
-$Rest=if($args.Count-gt1){@($args[1..($args.Count-1)])}else{@()}
+$Rest=@(if($args.Count-gt1){$args[1..($args.Count-1)]})
 if($Command-and$Command-notin$supportedCommands){throw "Bilinmeyen SDD komutu: $Command"}
 $ErrorActionPreference='Stop'
 try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding']='utf8' } catch {}
 $here=Split-Path -Parent $PSCommandPath; $lib=Join-Path (Split-Path -Parent $here) 'lib'
-. (Join-Path $lib 'common.ps1'); . (Join-Path $lib 'ledger.ps1'); . (Join-Path $lib 'events.ps1'); . (Join-Path $lib 'tui.ps1')
-. (Join-Path $lib 'stages.ps1'); . (Join-Path $lib 'tier0.ps1'); . (Join-Path $lib 'tier1.ps1'); . (Join-Path $lib 'converge.ps1'); . (Join-Path $lib 'loop.ps1')
+. (Join-Path $lib 'common.ps1'); . (Join-Path $lib 'ledger.ps1'); . (Join-Path $lib 'spectatui.ps1'); . (Join-Path $lib 'events.ps1'); . (Join-Path $lib 'tui.ps1')
+. (Join-Path $lib 'stages.ps1'); . (Join-Path $lib 'tier0.ps1'); . (Join-Path $lib 'tier1.ps1'); . (Join-Path $lib 'converge.ps1'); . (Join-Path $lib 'loop.ps1'); . (Join-Path $lib 'workflow.ps1')
 Get-ChildItem (Join-Path $lib 'adapters') -Filter '*.ps1' | ForEach-Object { . $_.FullName }
 
 function Show-Help {
     Write-Host "`nsdd — spec-driven development orkestratörü`n" -ForegroundColor Cyan
     Write-Host '  sdd init | upgrade [-Force] | self-update | status | tui'
+    Write-Host '  sdd spectatui install [-SkipTests]   patched SpectaTUI yan-yana kurulum'
     Write-Host '  sdd spec|plan|tasks|analyze [-Agent A] [-Model M] [-Effort E] [-Ui auto|plain|tui|raw]'
     Write-Host '  sdd implement [-ObserveEvery N] [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd converge [-Agent A] [-Model M] [-Effort E] [-Ui MODE]'
     Write-Host '  sdd config               tüm stage routinglerini sırayla ayarlar'
-    Write-Host "  sdd config <stage>       yalnız verilen stage'i ayarlar`n"
+    Write-Host '  sdd config <stage>       yalnız verilen stage routing ayarını değiştirir'
+    Write-Host '  sdd config --json        routing bilgisini makine-okunur verir'
+    Write-Host '  sdd workflow-resume      en yeni paused/failed sdd-native runını devam ettirir'
+    Write-Host '  sdd recover-implement    yarıda kesilmiş eski implement WIP stateini onarır'
+    Write-Host "  sdd config set <stage> -Agent A -Model M -Effort E`n"
 }
 function Get-CommonArguments {
     param([object[]]$Arguments)
@@ -49,22 +54,177 @@ function Get-ConfiguredUi {
 }
 function Invoke-WithEventContext {
     param([string]$ProjectRoot,[string]$Stage,[string]$UiMode,[scriptblock]$Action)
-    $null=Initialize-SddEventContext -ProjectRoot $ProjectRoot -UiMode $UiMode -Stage $Stage; $status='completed'
-    try{return & $Action}catch{$status='failed';throw}finally{$null=Close-SddEventContext -Status $status}
+    $null=Initialize-SddEventContext -ProjectRoot $ProjectRoot -UiMode $UiMode -Stage $Stage
+    $status='completed'
+    try {
+        $result = & $Action
+        $semanticResult = @($result) | Select-Object -Last 1
+        if ($null -ne $semanticResult -and
+            $semanticResult.PSObject.Properties.Name -contains 'ok' -and
+            -not [bool]$semanticResult.ok) {
+            $status='failed'
+            $detail = ''
+            foreach ($name in @('output','reason','summary')) {
+                if ($semanticResult.PSObject.Properties.Name -contains $name -and $semanticResult.$name) {
+                    $detail = [string]$semanticResult.$name
+                    break
+                }
+            }
+            if (-not $detail) { $detail = "$Stage başarısız oldu." }
+            Send-SddEvent -Message $detail -Category 'error' -EventType 'stage_failed' -Level 'error' -Stage $Stage -Status 'failed'
+        }
+        return $result
+    } catch {
+        $status='failed'
+        throw
+    } finally {
+        $null=Close-SddEventContext -Status $status
+    }
 }
 function Invoke-Sdd {
     if(-not$Command){Show-Help;return}
     if($Command-eq'self-update'){$x=Update-SddInstallation;Write-Host "`nSDD motoru güncel: $($x.version.Substring(0,[Math]::Min(8,$x.version.Length)))" -ForegroundColor Green;Write-Host "Sonraki komutlar yeni sürümü kullanacak.`n";return}
-    if($Command-eq'init'){$x=Initialize-SddProject -ProjectRoot (Get-Location).Path;Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
+    if($Command-eq'init'){$projectRoot=(Get-Location).Path;$x=Initialize-SddProject -ProjectRoot $projectRoot;if(Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue){$null=Write-SddSpectaConfig -ProjectRoot $projectRoot};Write-Host "`nSDD kuruldu." -ForegroundColor Green;foreach($p in $x.Created){Write-Host "  + $p" -ForegroundColor Green};foreach($p in $x.Skipped){Write-Host "  = $p (zaten var, dokunulmadı)" -ForegroundColor DarkGray};Write-Host "`nSonraki: .sdd/config.yaml'ı gözden geçir, sonra 'sdd status'.`n";return}
+    if($Command-eq'spectatui'){$sub=if($Rest.Count){[string]$Rest[0]}else{''};if($sub-ne'install'){throw 'Kullanım: sdd spectatui install [-SkipTests]'};$installer=Join-Path (Split-Path -Parent $here) 'scripts/install-spectatui-sdd.ps1';if(-not(Test-Path -LiteralPath $installer)){throw "SpectaTUI installer bulunamadı: $installer"};$installArgs=@(if($Rest.Count-gt1){$Rest[1..($Rest.Count-1)]});& $installer @installArgs;return}
     $root=Find-ProjectRoot;$paths=Get-SddPaths $root
     $upgrade=Update-SddConfigCompatibility -ConfigPath $paths.Config
-    if($upgrade.changed){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
+    $machineConfigJson = ($Command -eq 'config' -and $Rest.Count -eq 1 -and ([string]$Rest[0]) -eq '--json')
+    if($upgrade.changed -and -not $machineConfigJson){Write-Host "Config güncellendi: $($upgrade.keys -join ', ')" -ForegroundColor DarkGray}
     switch($Command){
-      'upgrade'{$force=$false;if($Rest.Count-gt1-or($Rest.Count-eq1-and$Rest[0]-ne'-Force')){throw 'Kullanım: sdd upgrade [-Force]'};if($Rest.Count-eq1){$force=$true};$x=Sync-SddProjectAssets -ProjectRoot $root -Force:$force;Write-Host "`nProje SDD assetleri güncellendi: $($x.updated.Count) dosya" -ForegroundColor Green;Write-Host "Workflow: $($x.workflow_version.Substring(0,[Math]::Min(8,$x.workflow_version.Length)))";if($x.updated.Count){Write-Host 'Değişiklikleri inceleyip proje reposunda commit edin.' -ForegroundColor Yellow}}
-      'status'{Show-LedgerStatus $paths.State}
+      'upgrade'{$force=$false;if($Rest.Count-gt1-or($Rest.Count-eq1-and$Rest[0]-ne'-Force')){throw 'Kullanım: sdd upgrade [-Force]'};if($Rest.Count-eq1){$force=$true};$x=Sync-SddProjectAssets -ProjectRoot $root -Force:$force;if(Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue){$null=Write-SddSpectaConfig -ProjectRoot $root};Write-Host "`nProje SDD assetleri güncellendi: $($x.updated.Count) dosya" -ForegroundColor Green;Write-Host "Workflow: $($x.workflow_version.Substring(0,[Math]::Min(8,$x.workflow_version.Length)))";if($x.updated.Count){Write-Host 'Değişiklikleri inceleyip proje reposunda commit edin.' -ForegroundColor Yellow}}
+      'status'{
+        if(Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue){
+            $null=Sync-SddSpectaStatusFromDisk -ProjectRoot $root
+        }
+        Show-LedgerStatus $paths.State
+      }
       'tui'{Show-SddDashboard $root}
-      'config'{$o=Get-CommonArguments $Rest;if($o.remaining.Count-gt1){throw 'Kullanım: sdd config [stage] [-RunOnly]'};$stage='all';if($o.remaining.Count-gt0-and-not[string]::IsNullOrWhiteSpace($o.remaining[0])){$stage=$o.remaining[0]};$cfg=Read-SddConfig $paths.Config;$null=Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only}
+      'config'{
+        $firstConfigArg = if ($Rest.Count -gt 0) { [string]$Rest[0] } else { '' }
+        if ($Rest.Count -eq 1 -and $firstConfigArg -eq '--json') {
+            $doc = Get-SddSpectaConfigDocument -ProjectRoot $root
+            if ($null -eq $doc) { throw 'SDD config okunamadı.' }
+            $doc | ConvertTo-Json -Depth 8
+            return
+        }
+        if ($Rest.Count -ge 2 -and $firstConfigArg -eq 'set') {
+            $stage = [string]$Rest[1]
+            $validStages = @('spec','plan','tasks','analyze','implement','converge')
+            if ($stage -notin $validStages) {
+                throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'
+            }
+            $tail = @()
+            if ($Rest.Count -gt 2) { $tail = @($Rest[2..($Rest.Count - 1)]) }
+            $o = Get-CommonArguments -Arguments $tail
+            $agentValue = [string]$o.agent
+            $modelValue = [string]$o.model
+            $effortValue = [string]$o.effort
+            if ($o.remaining.Count -gt 0 -or -not $agentValue -or -not $modelValue -or -not $effortValue) {
+                throw 'Kullanım: sdd config set <stage> -Agent A -Model M -Effort E'
+            }
+            $null = Set-SddStageProfile -ConfigPath $paths.Config -StageName $stage -Agent $agentValue -Model $modelValue -Effort $effortValue
+            $doc = Get-SddSpectaConfigDocument -ProjectRoot $root
+            $doc | ConvertTo-Json -Depth 8
+            return
+        }
+        $o = Get-CommonArguments -Arguments $Rest
+        if ($o.remaining.Count -gt 1) { throw 'Kullanım: sdd config [stage] [-RunOnly]' }
+        $stage = 'all'
+        if ($o.remaining.Count -gt 0) { $stage = [string]$o.remaining[0] }
+        $cfg = Read-SddConfig -ConfigPath $paths.Config
+        $null = Show-AgentSelection -Config $cfg -ConfigPath $paths.Config -StageName $stage -RunOnly:$o.run_only
+      }
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
+      'workflow-stage'{$stage=if($Rest.Count-eq1){[string]$Rest[0]}else{''};if($stage-notin@('prepare','analyze','closure')){throw 'Kullanım: sdd workflow-stage prepare|analyze|closure'};$wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step $stage -UiMode raw;if($wr.pause){exit 75}}
+      'workflow-resume'{
+        if($Rest.Count){throw 'Kullanım: sdd workflow-resume'}
+
+        # .sdd/state.json is authoritative for where domain work must continue.
+        # Never resume a newer but incompatible Spec Kit run (for example a
+        # fresh run that failed near the beginning) just because its timestamp
+        # is newer than the real implement/closure run.
+        $L=Read-Ledger $paths.State
+        $implStatus=[string](Get-WorkflowProperty -Object $L.stages.implement -Name 'status' -Default 'not_started')
+        $analyzeStatus=[string](Get-WorkflowProperty -Object $L.stages.analyze -Name 'status' -Default 'not_started')
+        $pendingCount=@(Get-LedgerTasks $L | Where-Object {$_.status -eq 'pending'}).Count
+        $desiredStep=if($implStatus-in@('running','interrupted')-or($pendingCount-gt0-and$analyzeStatus-eq'completed')){
+            'autonomous-closure'
+        }elseif($analyzeStatus-ne'completed'){
+            'analyze'
+        }else{
+            'tasks-ready'
+        }
+
+        $lines=@(& specify workflow status 2>&1)
+        if($LASTEXITCODE-ne0){throw "Workflow status okunamadı: $($lines-join' | ')"}
+        $resumable=@()
+        foreach($line in $lines){
+            if([string]$line-match '^\s*●\s+([0-9a-f]+)\s+sdd-native\s+(paused|failed)\s+(\S+)'){
+                $stamp=$null
+                try{$stamp=[DateTimeOffset]::Parse($matches[3])}catch{$stamp=[DateTimeOffset]::MinValue}
+                $resumable += [pscustomobject]@{id=$matches[1];status=$matches[2];stamp=$stamp}
+            }
+        }
+
+        $target=$null
+        foreach($candidate in @($resumable|Sort-Object stamp -Descending)){
+            $statusLines=@(& specify workflow status $candidate.id --json 2>$null)
+            if($LASTEXITCODE-ne0-or$statusLines.Count-eq0){continue}
+            try{$runState=(($statusLines-join[Environment]::NewLine)|ConvertFrom-Json -ErrorAction Stop)}catch{continue}
+            $currentStep=[string](Get-WorkflowProperty -Object $runState -Name 'current_step_id' -Default '')
+            if($currentStep-eq$desiredStep){$target=$candidate;break}
+        }
+
+        if($null-ne$target){
+            Write-Host "Workflow resume: $($target.id) ($($target.status)) · step=$desiredStep" -ForegroundColor Cyan
+            & specify workflow resume $target.id
+            if($LASTEXITCODE-ne0){throw "Workflow resume başarısız: $($target.id)"}
+            return
+        }
+
+        # History can be inconsistent after an external kill or an accidental
+        # fresh run. In that case continue the authoritative domain stage
+        # directly instead of restarting from spec/tasks.
+        Write-Host "Uyumlu Spec Kit run bulunamadı; authoritative SDD state doğrudan devam ediyor: $desiredStep" -ForegroundColor Yellow
+        switch($desiredStep){
+            'autonomous-closure'{
+                $wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step closure -UiMode raw
+                if($wr.pause){exit 75}
+            }
+            'analyze'{
+                $wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step analyze -UiMode raw
+                if($wr.pause){exit 75}
+            }
+            default{
+                $wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step prepare -UiMode raw
+                if($wr.pause){exit 75}
+            }
+        }
+      }
+      'recover-implement'{
+        if($Rest.Count){throw 'Kullanım: sdd recover-implement'}
+        $cfg=Read-SddConfig $paths.Config
+        $L=Read-Ledger $paths.State
+        $stage=$L.stages.implement
+        $status=[string](Get-WorkflowProperty -Object $stage -Name 'status' -Default 'not_started')
+        if($status-notin@('not_started','running')){throw "Implement recovery yalnız not_started/running durumda kullanılabilir; mevcut=$status"}
+        $dirty=@(Get-GitStatusForTier0 -ProjectRoot $root)
+        if($dirty.Count-eq0){throw 'Recovery için implement WIP bulunamadı; çalışma ağacı temiz.'}
+        $batchSize=[Math]::Max(1,[int](Get-WorkflowProperty -Object $cfg.loop -Name 'batch_size' -Default 4))
+        $batch=@(Get-PendingBatch -Ledger $L -BatchSize $batchSize)
+        if($batch.Count-eq0){throw 'Recovery için pending implement batch bulunamadı.'}
+        $baseline=Get-GitBaseline -ProjectRoot $root
+        $profile=$cfg.agents.implement
+        Set-ImplementStageState -Ledger $L -Status 'running' -Reason 'running' -Profile $profile
+        Set-WorkflowProperty -Object $stage -Name 'active_batch' -Value @($batch.id)
+        Set-WorkflowProperty -Object $stage -Name 'active_baseline' -Value $baseline
+        Set-WorkflowProperty -Object $stage -Name 'last_error' -Value 'Recovered after an external interruption before the in-flight checkpoint was persisted.'
+        Write-Ledger -Ledger $L -StatePath $paths.State
+        if(Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue){
+            $null=Write-SddSpectaStatus -ProjectRoot $root -Ledger $L -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber 1 -Attempt 1 -Profile $profile -StopReason 'running'
+        }
+        Write-Host "Implement recovery hazır: $(@($batch.id)-join', ') | baseline=$($baseline.Substring(0,[Math]::Min(8,$baseline.Length)))" -ForegroundColor Green
+      }
       {$_-in@('spec','plan','tasks')}{
         $o=Get-CommonArguments $Rest;$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$profile=Get-CommandProfile $cfg $Command $o $paths.Config
         $stageArgs='';$prompt='';$resume=$false;$a=@($o.remaining);for($i=0;$i-lt$a.Count;$i++){switch -Regex([string]$a[$i]){'^-Prompt$'{if(++$i-ge$a.Count){throw '-Prompt için değer gerekli.'};$prompt=if($a[$i]-is[Array]){@($a[$i]|ForEach-Object{[string]$_})-join[Environment]::NewLine}else{[string]$a[$i]};continue};'^-Resume$'{$resume=$true;continue};default{$stageArgs=(@($stageArgs,[string]$a[$i])|Where-Object{$_})-join' '}}}

@@ -235,3 +235,106 @@ Gerçek CLI kabul testi bilinçli olarak kullanıcı ortamına bırakılır: ilg
 sağlayıcının kurulu ve oturumunun açık olması, model adlarının hesapta mevcut
 olması gerekir. `sdd config` menüsü kurulum durumunu gösterir; Cursor mevcutsa
 `agent --list-models` sonucunu da model önerilerine ekler.
+
+
+---
+
+## SpectaTUI experimental workflow
+
+The current PowerShell CLI/TUI remains the supported fallback:
+
+~~~text
+sdd ...
+sdd tui
+~~~
+
+The experimental path keeps the same SDD domain engine but lets the Spec Kit
+workflow engine own pipeline run/resume/status and lets SpectaTUI launch it.
+
+### Setup
+
+Use Spec Kit 1.0.6 or later, then update managed project assets:
+
+~~~powershell
+sdd upgrade
+~~~
+
+This installs:
+
+- .specify/workflows/sdd-native/workflow.yml
+- .specify/workflows/steps/sdd-process/
+- the sdd-native workflow registry entry
+
+The project must already have an active feature with committed spec.md, plan.md
+and tasks.md and a clean worktree.
+
+### Run and control SDD from SpectaTUI
+
+Install and open the side-by-side patched UI:
+
+~~~powershell
+sdd upgrade
+sdd spectatui install
+spectatui-sdd -p .
+~~~
+
+The overlay is pinned to SpectaTUI 1.1.0 commit
+`c039831190588c336abf4adba8a0d7c91c148774`. Stock `spectatui`, `sdd tui`
+and all normal `sdd` CLI paths remain available.
+
+For the full workflow, **Automation Workflows → SDD Native Closure** still
+provides native Spec Kit run/resume/status. The SDD-specific control surface is
+also available directly with `D` / **SDD Control**:
+
+- `f` — run the full SDD workflow
+- `R` — resume its latest run
+- `r` — run only the selected SDD stage
+- `e` — edit that stage's agent/model/effort routing
+
+Routing edits go through the SDD backend and persist to the authoritative
+`.sdd/config.yaml`; SpectaTUI never writes that YAML itself.
+
+The Overview dashboard separates output into:
+
+- **Workflow** — lifecycle position
+- **SDD Runtime** — embedded batch/retry/gate/Converge events
+- **SDD Agent** — normalized, parsed Codex/Claude/Cursor messages and tool events
+- **Agent Output** — the original SpectaTUI tmux/coding-agent pane, preserved
+  unchanged and always available through the normal Coding/attach-agent paths
+
+The SDD engine writes Git-ignored, non-authoritative projections at
+`.specify/sdd-status.json`, `.specify/sdd-events.json`, and
+`.specify/sdd-config.json`. `.sdd/state.json` and `.sdd/config.yaml`
+remain the domain sources of truth.
+
+Full workflow execution remains:
+
+~~~text
+tasks-ready
+→ analyze
+→ autonomous-closure
+    → existing implement loop
+    → Tier 0 / Tier 1
+    → final strict Tier 1
+    → existing LLM-based Converge
+    → convergence tasks? implement again
+    → clean convergence
+~~~
+
+Provider/model/effort are still config-driven; they are not stored in workflow
+YAML. Raw CLI output remains available for debugging, but normal SDD operation
+returns to the dashboard instead of forcing the raw-output popup.
+
+### Resume and convergence
+
+Spec Kit resumes only the top-level pipeline step. Exact task/session retry
+semantics remain inside .sdd/state.json and the existing implement loop.
+Observation pause maps to a native workflow PAUSED result. Converge remains the
+normal LLM-based speckit-converge skill with the existing deterministic
+append-only/write-boundary checks.
+
+For the full semantics matrix, architecture decision, test coverage, and known
+limitations see docs/SPECTATUI_NATIVE_WORKFLOW.md.
+
+The old PowerShell TUI must not be removed until the patched UI has passed the
+interactive Windows-terminal smoke/performance measurements.

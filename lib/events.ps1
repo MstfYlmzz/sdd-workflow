@@ -28,7 +28,8 @@ function Resolve-SddUiMode {
 }
 
 function Test-SddPartialStreaming {
-    return [bool]($script:SddEventContext -and $script:SddEventContext.ui_mode -eq 'tui')
+    # raw modu Spec Kit/SpectaTUI bridge için line-oriented canlı event akışıdır.
+    return [bool]($script:SddEventContext -and $script:SddEventContext.ui_mode -in @('tui','raw'))
 }
 
 function Initialize-SddEventContext {
@@ -58,18 +59,33 @@ function Initialize-SddEventContext {
     if ($script:SddEventContext.ui_mode -eq 'tui' -and (Get-Command Start-SddLiveTui -ErrorAction SilentlyContinue)) {
         Start-SddLiveTui -Context $script:SddEventContext
     }
+    if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
+        $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $ProjectRoot -Stage $Stage -Status 'running'
+    }
+    if (Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaConfig -ProjectRoot $ProjectRoot
+    }
     Send-SddEvent -Message 'run başladı' -Category 'workflow' -EventType 'run_started' -Stage $Stage -Status 'running'
     return [pscustomobject]$script:SddEventContext
 }
 
 function Close-SddEventContext {
     param([ValidateSet('completed','failed','interrupted')] [string] $Status = 'completed')
-    if ($script:SddEventContext) { Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status }
+    if ($script:SddEventContext) {
+        Send-SddEvent -Message "run $Status" -Category 'workflow' -EventType 'run_completed' -Status $Status
+        if (Get-Command Sync-SddSpectaStatusFromDisk -ErrorAction SilentlyContinue) {
+            # Kapanışta generic event/stage override değil authoritative ledger ve
+            # actionable-stage resolver kazanır. Böylece başarısız bir rerun eski
+            # completed stage'i ekranda "current" olarak sabitlemez.
+            $null = Sync-SddSpectaStatusFromDisk -ProjectRoot ([string]$script:SddEventContext.project_root)
+        }
+    }
     if ($script:SddEventContext -and $script:SddEventContext.tui_active -and
         (Get-Command Stop-SddLiveTui -ErrorAction SilentlyContinue)) {
         Stop-SddLiveTui -Context $script:SddEventContext
     }
     $script:SddEventSinkEnabled = $false
+    Remove-Variable -Scope Script -Name SddPartialLastPersist -ErrorAction SilentlyContinue
     $context = $script:SddEventContext
     $script:SddEventContext = $null
     return $context
@@ -120,6 +136,7 @@ function Write-SddTelemetryEvent {
 function Format-SddPlainEvent {
     param([Parameter(Mandatory)] [object] $Event)
     $tag = switch ([string]$Event.category) {
+        'agent'             { 'AGENT' }
         'assistant'         { 'AI' }
         'reasoning_summary' { 'THINK' }
         'tool'              { 'TOOL' }
@@ -202,12 +219,39 @@ function Send-SddEvent {
     } else { $script:SddEventContext.events.Add($evt) }
     while ($script:SddEventContext.events.Count -gt 250) { $script:SddEventContext.events.RemoveAt(0) }
 
-    Write-SddEventLog -Event $evt -LogPath $LogPath
-    [void](Write-SddTelemetryEvent -Event $evt -Path $script:SddEventContext.telemetry_path)
+    # Token-level provider partials can arrive dozens of times per second.
+    # Keep the in-memory message lossless, but sample disk/raw persistence so a
+    # long coding turn does not flood logs, JSONL, pipes, or the SpectaTUI job buffer.
+    $persistEvent = $evt
+    $sampledOut = $false
+    if ($EventType -eq 'agent_message_partial') {
+        if (-not (Get-Variable -Scope Script -Name SddPartialLastPersist -ErrorAction SilentlyContinue)) {
+            $script:SddPartialLastPersist = @{}
+        }
+        $partialKey = "$($script:SddEventContext.run_id)|$Provider|$($evt.stage)"
+        $now = [DateTimeOffset]::UtcNow
+        if ($script:SddPartialLastPersist.ContainsKey($partialKey)) {
+            $last = [DateTimeOffset]$script:SddPartialLastPersist[$partialKey]
+            if (($now - $last).TotalMilliseconds -lt 250) { $sampledOut = $true }
+        }
+        if (-not $sampledOut) {
+            $script:SddPartialLastPersist[$partialKey] = $now
+            $persistEvent = $renderEvent
+        }
+    }
+
+    if (-not $sampledOut) {
+        Write-SddEventLog -Event $persistEvent -LogPath $LogPath
+        [void](Write-SddTelemetryEvent -Event $persistEvent -Path $script:SddEventContext.telemetry_path)
+    }
+    if (Get-Command Write-SddSpectaEvent -ErrorAction SilentlyContinue) {
+        $null = Write-SddSpectaEvent -ProjectRoot ([string]$script:SddEventContext.project_root) -Event $evt
+    }
 
     switch ([string]$script:SddEventContext.ui_mode) {
         'raw' {
-            $payload = ConvertTo-SddTelemetryEvent -Event $evt
+            if ($sampledOut) { return }
+            $payload = ConvertTo-SddTelemetryEvent -Event $persistEvent
             Write-Host ($payload | ConvertTo-Json -Compress -Depth 12)
         }
         'tui' {

@@ -30,6 +30,31 @@ function ConvertTo-ClaudeTextParts {
     return @($parts)
 }
 
+function Get-ClaudeToolInputValue {
+    param([object] $Input, [string[]] $Names)
+    if ($null -eq $Input) { return '' }
+    foreach ($name in $Names) {
+        if ($Input.PSObject.Properties.Name -contains $name -and $Input.$name) { return [string]$Input.$name }
+    }
+    return ''
+}
+
+function Send-ClaudeToolActivity {
+    param([object] $Block, [string] $LogPath)
+    $name = if ($Block.PSObject.Properties.Name -contains 'name') { [string]$Block.name } else { 'tool' }
+    $input = if ($Block.PSObject.Properties.Name -contains 'input') { $Block.input } else { $null }
+    $command = Get-ClaudeToolInputValue -Input $input -Names @('command','cmd')
+    $path = Get-ClaudeToolInputValue -Input $input -Names @('file_path','path','filename')
+    if ($command -or $name -match '(?i)bash|shell|terminal|command') {
+        Send-SddEvent -Message $name -Command $command -LogPath $LogPath -Category 'command' -EventType 'command_started' -Source 'provider' -Provider 'claude' -Status 'running'
+    } elseif ($path -or $name -match '(?i)write|edit|patch|notebook') {
+        $message = if ($path) { $path } else { $name }
+        Send-SddEvent -Message $message -LogPath $LogPath -Category 'file_change' -EventType 'file_change' -Source 'provider' -Provider 'claude' -Status 'running'
+    } else {
+        Send-SddEvent -Message $name -LogPath $LogPath -Category 'tool' -EventType 'tool_use' -Source 'provider' -Provider 'claude' -Status 'running'
+    }
+}
+
 function Read-ClaudeEvent {
     param(
         [string] $Line,
@@ -59,7 +84,7 @@ function Read-ClaudeEvent {
             foreach ($block in @($content)) {
                 if ($null -eq $block -or $block -is [string] -or -not ($block.PSObject.Properties.Name -contains 'type')) { continue }
                 if ($block.type -eq 'tool_use') {
-                    Send-SddEvent -Message ([string]$block.name) -LogPath $LogPath -Category 'tool' -EventType 'tool_use' -Source 'provider' -Provider 'claude' -Status 'started'
+                    Send-ClaudeToolActivity -Block $block -LogPath $LogPath
                 } elseif ($block.type -in @('thinking','reasoning') -and $block.PSObject.Properties.Name -contains 'thinking') {
                     Send-SddEvent -Message ([string]$block.thinking) -LogPath $LogPath -Category 'reasoning_summary' -EventType 'reasoning' -Source 'provider' -Provider 'claude'
                 }
@@ -127,6 +152,8 @@ function Invoke-ClaudeAgent {
     }
     $parts = [System.Collections.Generic.List[string]]::new()
     $exitCode = -1
+    $agentStarted = Get-Date
+    Send-SddEvent -Message "Claude agent başladı · $($Request.model)/$($Request.effort)" -LogPath $Request.log_path -Category 'agent' -EventType 'agent_started' -Source 'adapter' -Provider 'claude' -Status 'running'
     Push-Location ([string]$Request.cwd)
     try {
         & claude @args 2>&1 | ForEach-Object {
@@ -142,6 +169,8 @@ function Invoke-ClaudeAgent {
     if (-not $result.last_message -and $parts.Count -gt 0) { $result.last_message = $parts[$parts.Count - 1] }
     $result.ok = [bool]$result._completed -and $exitCode -eq 0 -and $result.denied.Count -eq 0
     $result.denied = @($result.denied)
+    $duration = [long]((Get-Date) - $agentStarted).TotalMilliseconds
+    Send-SddEvent -Message $(if ($result.ok) { 'Claude agent tamamlandı' } else { 'Claude agent başarısız' }) -LogPath $Request.log_path -Category 'agent' -EventType 'agent_completed' -Source 'adapter' -Provider 'claude' -Status $(if ($result.ok) { 'completed' } else { 'failed' }) -DurationMs $duration
     $result.Remove('_completed')
     return [pscustomobject]$result
 }

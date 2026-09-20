@@ -57,7 +57,18 @@ function Get-GitStatusForTier0 {
     # Log dosyaları orkestratör tarafından agent çalışırken yazılır. Bunlar
     # çalışma ağacı temizliği kararına dahil değildir.
     $res = Invoke-GitCapture -ProjectRoot $ProjectRoot -Arguments @(
-        'status','--porcelain','--untracked-files=all','--','.',':(exclude).sdd/logs/**',':(exclude).sdd/runs.jsonl'
+        'status','--porcelain','--untracked-files=all','--','.',
+        ':(exclude).sdd/logs/**',
+        ':(exclude).sdd/runs.jsonl',
+        ':(exclude).sdd/config.yaml',
+        ':(exclude).sdd/state.json',
+        ':(exclude).specify/sdd-status.json',
+        ':(exclude).specify/sdd-status.json.tmp',
+        ':(exclude).specify/sdd-events.json',
+        ':(exclude).specify/sdd-events.json.tmp',
+        ':(exclude).specify/sdd-config.json',
+        ':(exclude).specify/sdd-config.json.tmp',
+        ':(exclude).spectatui.toml'
     )
     return @($res.Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
