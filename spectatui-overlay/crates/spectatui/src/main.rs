@@ -277,6 +277,18 @@ async fn run_loop(
                 }
                 AppEvent::Tick => {
                     app.indexing_tick = app.indexing_tick.wrapping_add(1);
+                    // File-system notifications are best-effort on Windows and can coalesce
+                    // rapid atomic projection rewrites. While SDD is active, reload the tiny
+                    // local projection twice per second so the dashboard never appears frozen.
+                    let sdd_running = app
+                        .project
+                        .sdd_status
+                        .as_ref()
+                        .map(|status| status.status == "running")
+                        .unwrap_or(false);
+                    if sdd_running && app.indexing_tick % 5 == 0 {
+                        app.refresh_project();
+                    }
                 }
             }
         }
