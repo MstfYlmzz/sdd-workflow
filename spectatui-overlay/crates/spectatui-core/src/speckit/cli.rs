@@ -403,7 +403,7 @@ pub struct SpecifyCliClient {
 
 fn cli_spawn_command(action: &CliAction, cmd_line: &str) -> Option<(String, Vec<String>)> {
     #[cfg(windows)]
-    if matches!(action, CliAction::SddStageRun { .. } | CliAction::SddConfigSet { .. }) {
+    if matches!(action, CliAction::SddStageRun { .. } | CliAction::SddConfigSet { .. } | CliAction::SddWorkflowResume) {
         // SDD is installed on Windows as a PowerShell/.cmd shim. Rust's
         // Command/CreateProcess does not use PowerShell command discovery, so
         // spawning bare sdd can fail even though Get-Command sdd works.
