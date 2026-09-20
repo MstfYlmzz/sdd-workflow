@@ -37,7 +37,7 @@ try {
     Assert-True ((Convert-EffortToClaude -Effort high -Model sonnet) -eq 'high') 'Claude effort doğrudan eşlenmeli.'
 
     $events=[Collections.Generic.List[object]]::new()
-    function global:Send-SddEvent {
+    function Send-SddEvent {
         param($Message,$EventType,$Category,$Provider,$LogPath,$Level,$Source,$Command,$Status,$DurationMs,$Usage,$Metadata,$Stage,$ExitCode)
         $events.Add([pscustomobject]@{message=$Message;event_type=$EventType;category=$Category;command=$Command;status=$Status})
     }
@@ -47,8 +47,6 @@ try {
     Send-ClaudeToolActivity -Block $edit -LogPath ''
     Assert-True (@($events | Where-Object { $_.category -eq 'command' -and $_.command -eq 'node --test tests/a.test.js' }).Count -eq 1) 'Claude Bash toolu structured terminal event olmalı.'
     Assert-True (@($events | Where-Object { $_.category -eq 'file_change' -and $_.message -eq 'src/app.js' }).Count -eq 1) 'Claude Write toolu structured file event olmalı.'
-    Remove-Item Function:\global:Send-SddEvent -ErrorAction SilentlyContinue
-
     Write-Host 'CLAUDE ADAPTER INTEGRATION OK' -ForegroundColor Green
 } finally {
     Remove-Item Function:\global:claude -ErrorAction SilentlyContinue
