@@ -428,8 +428,15 @@ function Invoke-ImplementLoop {
 
             $enableConverge = [bool](Get-WorkflowProperty -Object $loopCfg -Name 'enable_converge' -Default $false)
             if ($enableConverge) {
-                Write-SddLog -Message '[implement] final gate geçti; converge başlıyor' -LogPath $logPath -Level 'info'
-                $converge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot
+                $maxConvergeRounds = [Math]::Max(1, [int](Get-WorkflowProperty -Object $loopCfg -Name 'max_converge_rounds' -Default 3))
+                $currentConvergeRound = [int](Get-WorkflowProperty -Object $Ledger.stages.converge -Name 'round' -Default 0)
+                $finalVerification = ($currentConvergeRound -ge $maxConvergeRounds)
+                if ($finalVerification) {
+                    Write-SddLog -Message "[implement] final gate geçti; converge düzeltme bütçesi dolu ($currentConvergeRound/$maxConvergeRounds), final read-only doğrulama başlıyor" -LogPath $logPath -Level 'info'
+                } else {
+                    Write-SddLog -Message '[implement] final gate geçti; converge başlıyor' -LogPath $logPath -Level 'info'
+                }
+                $converge = Invoke-Converge -Config $Config -Ledger $Ledger -ProjectRoot $ProjectRoot -FinalVerification:$finalVerification
                 if (-not $converge.ok) {
                     Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason $converge.outcome -Profile $baseProfile
                     Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $converge.output
