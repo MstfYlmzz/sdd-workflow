@@ -54,7 +54,6 @@ fn draw_control(frame: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .map(|status| {
             matches!(status.status.as_str(), "running" | "interrupted")
-                && matches!(status.stage.as_str(), "implement" | "converge")
         })
         .unwrap_or(false);
     lines.push(Line::from(vec![
