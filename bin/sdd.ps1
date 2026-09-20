@@ -138,6 +138,23 @@ function Invoke-Sdd {
       'workflow-stage'{$stage=if($Rest.Count-eq1){[string]$Rest[0]}else{''};if($stage-notin@('prepare','analyze','closure')){throw 'Kullanım: sdd workflow-stage prepare|analyze|closure'};$wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step $stage -UiMode raw;if($wr.pause){exit 75}}
       'workflow-resume'{
         if($Rest.Count){throw 'Kullanım: sdd workflow-resume'}
+
+        # .sdd/state.json is authoritative for where domain work must continue.
+        # Never resume a newer but incompatible Spec Kit run (for example a
+        # fresh run that failed near the beginning) just because its timestamp
+        # is newer than the real implement/closure run.
+        $L=Read-Ledger $paths.State
+        $implStatus=[string](Get-WorkflowProperty -Object $L.stages.implement -Name 'status' -Default 'not_started')
+        $analyzeStatus=[string](Get-WorkflowProperty -Object $L.stages.analyze -Name 'status' -Default 'not_started')
+        $pendingCount=@(Get-LedgerTasks $L | Where-Object {$_.status -eq 'pending'}).Count
+        $desiredStep=if($implStatus-in@('running','interrupted')-or($pendingCount-gt0-and$analyzeStatus-eq'completed')){
+            'autonomous-closure'
+        }elseif($analyzeStatus-ne'completed'){
+            'analyze'
+        }else{
+            'tasks-ready'
+        }
+
         $lines=@(& specify workflow status 2>&1)
         if($LASTEXITCODE-ne0){throw "Workflow status okunamadı: $($lines-join' | ')"}
         $resumable=@()
@@ -148,11 +165,41 @@ function Invoke-Sdd {
                 $resumable += [pscustomobject]@{id=$matches[1];status=$matches[2];stamp=$stamp}
             }
         }
-        $target=@($resumable|Sort-Object stamp -Descending|Select-Object -First 1)
-        if($target.Count-eq0){throw 'Resume edilebilir paused/failed sdd-native workflow bulunamadı.'}
-        Write-Host "Workflow resume: $($target[0].id) ($($target[0].status))" -ForegroundColor Cyan
-        & specify workflow resume $target[0].id
-        if($LASTEXITCODE-ne0){throw "Workflow resume başarısız: $($target[0].id)"}
+
+        $target=$null
+        foreach($candidate in @($resumable|Sort-Object stamp -Descending)){
+            $statusLines=@(& specify workflow status $candidate.id --json 2>$null)
+            if($LASTEXITCODE-ne0-or$statusLines.Count-eq0){continue}
+            try{$runState=(($statusLines-join[Environment]::NewLine)|ConvertFrom-Json -ErrorAction Stop)}catch{continue}
+            $currentStep=[string](Get-WorkflowProperty -Object $runState -Name 'current_step_id' -Default '')
+            if($currentStep-eq$desiredStep){$target=$candidate;break}
+        }
+
+        if($null-ne$target){
+            Write-Host "Workflow resume: $($target.id) ($($target.status)) · step=$desiredStep" -ForegroundColor Cyan
+            & specify workflow resume $target.id
+            if($LASTEXITCODE-ne0){throw "Workflow resume başarısız: $($target.id)"}
+            return
+        }
+
+        # History can be inconsistent after an external kill or an accidental
+        # fresh run. In that case continue the authoritative domain stage
+        # directly instead of restarting from spec/tasks.
+        Write-Host "Uyumlu Spec Kit run bulunamadı; authoritative SDD state doğrudan devam ediyor: $desiredStep" -ForegroundColor Yellow
+        switch($desiredStep){
+            'autonomous-closure'{
+                $wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step closure -UiMode raw
+                if($wr.pause){exit 75}
+            }
+            'analyze'{
+                $wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step analyze -UiMode raw
+                if($wr.pause){exit 75}
+            }
+            default{
+                $wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step prepare -UiMode raw
+                if($wr.pause){exit 75}
+            }
+        }
       }
       'recover-implement'{
         if($Rest.Count){throw 'Kullanım: sdd recover-implement'}
