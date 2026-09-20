@@ -1353,6 +1353,26 @@ impl App {
                             job.output.push('\n');
                         }
                         job.output.push_str(&line);
+
+                        // SDD raw mode can emit thousands of JSONL/partial lines. Keeping the
+                        // entire hidden background stream makes redraw/polling progressively
+                        // slower even though the user sees the normalized projection instead.
+                        let streaming_sdd = match &job.action {
+                            CliAction::WorkflowRun { source } => source == "sdd-native",
+                            CliAction::SddWorkflowResume | CliAction::SddStageRun { .. } => true,
+                            _ => false,
+                        };
+                        let cap = if streaming_sdd { 32 * 1024 } else { 256 * 1024 };
+                        if job.output.len() > cap * 2 {
+                            let mut cut = job.output.len().saturating_sub(cap);
+                            while cut < job.output.len() && !job.output.is_char_boundary(cut) {
+                                cut += 1;
+                            }
+                            if cut < job.output.len() {
+                                job.output.drain(..cut);
+                                job.output.insert_str(0, "…\n");
+                            }
+                        }
                     }
                 }
                 Ok(CliEvent::Completed { success }) => {
