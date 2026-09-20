@@ -348,10 +348,12 @@ function Write-SddSpectaEvent {
     $rawCommand = [string](Get-SddSpectaProperty -Object $Event -Name 'command' -Default '')
     # Some Cursor stream versions emit a generic tool heartbeat with no tool name,
     # command or path. It carries no user-facing information and used to render as
-    # "tool  tool". Keep it in the raw telemetry/log, but omit it from the compact
-    # SpectaTUI projection.
+    # "tool  tool". Keep it in raw telemetry/logs, but omit it from SpectaTUI.
     if ($category -eq 'tool' -and [string]::IsNullOrWhiteSpace($rawCommand) -and
-        ([string]::IsNullOrWhiteSpace($rawMessage) -or $rawMessage.Trim() -match '^(?i:tool)
+        ([string]::IsNullOrWhiteSpace($rawMessage) -or $rawMessage.Trim() -eq 'tool')) {
+        return $null
+    }
+    $message = if (Get-Command ConvertTo-SddSafeText -ErrorAction SilentlyContinue) {
         [string](ConvertTo-SddSafeText -Value $rawMessage -MaxLength 6000)
     } else {
         $rawMessage
