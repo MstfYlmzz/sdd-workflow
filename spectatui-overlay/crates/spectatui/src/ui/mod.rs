@@ -272,7 +272,9 @@ fn draw_dashboard(frame: &mut Frame, app: &App, area: Rect) {
                         Constraint::Min(8),
                     ])
                     .split(right[1]);
+                    app.register_click(lower[0], ClickAction::FocusPane(Pane::SddRuntime));
                     sdd_runtime::draw(frame, app, lower[0]);
+                    app.register_click(lower[1], ClickAction::FocusPane(Pane::SddActivity));
                     sdd_agent::draw(frame, app, lower[1]);
                     app.register_click(lower[2], ClickAction::FocusPane(Pane::AgentOutput));
                     agent_output::draw(frame, app, lower[2]);
@@ -282,7 +284,9 @@ fn draw_dashboard(frame: &mut Frame, app: &App, area: Rect) {
                         Constraint::Min(7),
                     ])
                     .split(right[1]);
+                    app.register_click(lower[0], ClickAction::FocusPane(Pane::SddRuntime));
                     sdd_runtime::draw(frame, app, lower[0]);
+                    app.register_click(lower[1], ClickAction::FocusPane(Pane::SddActivity));
                     sdd_agent::draw(frame, app, lower[1]);
                 }
             } else {
