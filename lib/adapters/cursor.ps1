@@ -55,10 +55,16 @@ function Get-CursorToolValue {
 function Send-CursorToolActivity {
     param([object] $Tool, [string] $LogPath)
     if ($null -eq $Tool) { return }
+
     $name = Get-CursorToolValue -Object $Tool -Names @('name','tool_name','toolName','tool','function','action')
     if (-not $name -or $name -eq 'tool') {
         $typeName = Get-CursorToolValue -Object $Tool -Names @('type','event','subtype')
-        if ($typeName -and $typeName -notmatch '^(?i:tool|tool_call|tool_result)
+        if ($typeName -and $typeName -notmatch '^(?i:tool|tool_call|tool_result)$') {
+            $name = $typeName
+        }
+    }
+    if (-not $name) { $name = 'tool' }
+
     $status = Get-CursorToolValue -Object $Tool -Names @('status','state')
     if (-not $status) { $status = 'running' }
     $args = Get-CursorEventValue -Object $Tool -Names @('args','arguments','input')
