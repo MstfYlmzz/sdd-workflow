@@ -70,7 +70,7 @@ try{
         converge=[pscustomobject]@{agent='fake';model='m';effort='medium'}
       }
       gates=@([pscustomobject]@{name='diff';cmd='git diff --check'})
-      loop=[pscustomobject]@{batch_size=1;max_attempts=3;escalate_at=2;circuit_breaker=3;observe_every=0;enable_converge=$true;max_converge_rounds=3}
+      loop=[pscustomobject]@{batch_size=1;max_attempts=3;escalate_at=2;circuit_breaker=3;observe_every=0;enable_converge=$true;max_converge_rounds=1}
       analyze=[pscustomobject]@{block_on='critical'}
     }
 
@@ -79,6 +79,7 @@ try{
     Assert-True (($script:timeline -join '|')-eq'converge:1|implement:T002|converge:2') 'Converge task eklerse implement araya girmeden converge tekrar çalışmamalı.'
     Assert-True (@(Get-LedgerTasks $ledger).Count-eq2) 'Task toplamı convergence sonrası kalıcı 2 olmalı.'
     Assert-True (@(Get-LedgerTasks $ledger | Where-Object status -eq 'done').Count -eq 2) 'Yeni convergence task done olmalı.'
-    Assert-True ($ledger.stages.converge.status-eq'completed'-and$ledger.stages.converge.round-eq2) 'İkinci converge turu clean bitmeli.'
+    Assert-True ($ledger.stages.converge.status-eq'completed'-and$ledger.stages.converge.round-eq1) 'Repair budget dolduktan sonraki final verification aynı round sayısını koruyarak clean bitmeli.'
+    Assert-True ([bool]$ledger.stages.converge.final_verification_attempted) 'Final verification state üzerinde işaretlenmeli.'
     Write-Host 'CONVERGENCE LOOP INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}
