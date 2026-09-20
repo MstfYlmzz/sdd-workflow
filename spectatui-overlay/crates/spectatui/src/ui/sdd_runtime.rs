@@ -126,6 +126,15 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 runtime.activity_detail.clone()
             };
+            let activity_elapsed = if active && runtime.activity_started_at_ms > 0 {
+                format!(" · {}", duration_text(now.saturating_sub(runtime.activity_started_at_ms)))
+            } else {
+                String::new()
+            };
+            let detail_width = inner
+                .width
+                .saturating_sub(16)
+                .saturating_sub(activity_elapsed.chars().count() as u16) as usize;
             lines.push(Line::from(vec![
                 Span::styled(
                     format!(" {} ", activity_glyph(&runtime.activity_kind)),
@@ -135,10 +144,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                     format!("{:<9}", empty_as(&runtime.activity_label, &runtime.activity_kind)),
                     theme.dim_style,
                 ),
-                Span::styled(
-                    clip(&single_line(&detail), inner.width.saturating_sub(16) as usize),
-                    theme.info_style,
-                ),
+                Span::styled(clip(&single_line(&detail), detail_width), theme.info_style),
+                Span::styled(activity_elapsed, theme.faint_style),
             ]));
         }
 
