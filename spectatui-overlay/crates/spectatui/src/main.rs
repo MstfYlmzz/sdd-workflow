@@ -655,13 +655,24 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
                             }
                         }
                         KeyCode::Char('f') => {
-                            spawn_and_show_cli_job(
-                                app,
-                                cli_client,
-                                &CliAction::WorkflowRun {
-                                    source: "sdd-native".to_string(),
-                                },
-                            );
+                            let protected_state = app
+                                .project
+                                .sdd_status
+                                .as_ref()
+                                .map(|status| {
+                                    matches!(status.status.as_str(), "running" | "interrupted")
+                                        && matches!(status.stage.as_str(), "implement" | "converge")
+                                })
+                                .unwrap_or(false);
+                            if !protected_state {
+                                spawn_and_show_cli_job(
+                                    app,
+                                    cli_client,
+                                    &CliAction::WorkflowRun {
+                                        source: "sdd-native".to_string(),
+                                    },
+                                );
+                            }
                         }
                         KeyCode::Char('R') => {
                             spawn_and_show_cli_job(
