@@ -61,6 +61,20 @@ pub struct SddTaskProgress {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct SddFileChange {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    #[serde(default)]
+    pub binary: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SddRuntimeStatus {
     #[serde(default)]
     pub batch: Vec<String>,
@@ -82,6 +96,28 @@ pub struct SddRuntimeStatus {
     pub max_convergence_rounds: u32,
     #[serde(default)]
     pub stop_reason: String,
+    #[serde(default)]
+    pub active_baseline: String,
+    #[serde(default)]
+    pub changed_files: u64,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    #[serde(default)]
+    pub file_changes: Vec<SddFileChange>,
+    #[serde(default)]
+    pub activity_kind: String,
+    #[serde(default)]
+    pub activity_label: String,
+    #[serde(default)]
+    pub activity_detail: String,
+    #[serde(default)]
+    pub activity_started_at_ms: u64,
+    #[serde(default)]
+    pub agent_started_at_ms: u64,
+    #[serde(default)]
+    pub last_activity_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -142,6 +178,8 @@ pub struct SddEventSummary {
     pub status: String,
     #[serde(default)]
     pub message: String,
+    #[serde(default)]
+    pub command: String,
     #[serde(default)]
     pub provider: String,
     #[serde(default)]
