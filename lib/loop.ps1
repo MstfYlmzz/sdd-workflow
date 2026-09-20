@@ -309,9 +309,11 @@ function Invoke-ImplementLoop {
     $agentFn = Resolve-Adapter -AgentName ([string](Get-WorkflowProperty -Object $baseProfile -Name 'agent'))
     $logPath = Join-Path $paths.LogsDir 'implement.log'
 
+    $previousStatus = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'status' -Default 'not_started')
     $previousReason = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'stop_reason' -Default '')
+    $interruptedInFlight = ($previousStatus -eq 'running' -and $previousReason -eq 'running')
     $dirty = @(Get-GitStatusForTier0 -ProjectRoot $ProjectRoot)
-    $mayResumeDirty = $previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')
+    $mayResumeDirty = $interruptedInFlight -or $previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')
     if ($dirty.Count -gt 0 -and -not $mayResumeDirty) {
         throw "Implement loop temiz çalışma ağacıyla başlamalı. Önce commit/stash yap: $($dirty -join ' | ')"
     }
@@ -348,6 +350,13 @@ function Invoke-ImplementLoop {
     $resumeSession = if ($previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')) {
         [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Default '')
     } else { '' }
+    $recoveryBaseline = if ($interruptedInFlight) {
+        [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Default '')
+    } else { '' }
+    $recoveryBatchIds = if ($interruptedInFlight) {
+        @($(Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Default @()))
+    } else { @() }
+    $recoveringInFlight = $interruptedInFlight
 
     while ($true) {
         $pending = @(Get-LedgerTasks $Ledger | Where-Object { $_.status -eq 'pending' })
@@ -394,7 +403,16 @@ function Invoke-ImplementLoop {
             return [pscustomobject]@{ ok = $true; reason = 'completed'; batches = $attemptedBatches }
         }
 
-        $batch = @(Get-PendingBatch -Ledger $Ledger -BatchSize $batchSize)
+        if ($recoveringInFlight -and $recoveryBatchIds.Count -gt 0) {
+            $batch = @(
+                foreach ($id in $recoveryBatchIds) {
+                    $match = @(Get-LedgerTasks $Ledger | Where-Object { $_.id -eq $id -and $_.status -eq 'pending' } | Select-Object -First 1)
+                    if ($match.Count -gt 0) { $match[0] }
+                }
+            )
+        } else {
+            $batch = @(Get-PendingBatch -Ledger $Ledger -BatchSize $batchSize)
+        }
         if ($batch.Count -eq 0) {
             $detail = foreach ($task in $pending) {
                 $deps = @($task.depends_on | Where-Object {
@@ -460,8 +478,17 @@ function Invoke-ImplementLoop {
         $attemptedBatches++
         $nextAttempt = (@($batch | ForEach-Object { [int]$_.attempts } | Measure-Object -Maximum).Maximum) + 1
         $profile = if ($nextAttempt -ge $escalateAt) { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt $nextAttempt } else { Get-EscalatedProfile -BaseProfile $baseProfile -Attempt 1 }
-        $baseline = Get-GitBaseline -ProjectRoot $ProjectRoot
+        $baseline = if ($recoveringInFlight -and $recoveryBaseline) { $recoveryBaseline } else { Get-GitBaseline -ProjectRoot $ProjectRoot }
         $ids = @($batch.id) -join ', '
+
+        # Persist in-flight ownership BEFORE the external agent starts. If the
+        # terminal/process is killed, the next invocation can distinguish an
+        # interrupted implement batch from unrelated user WIP and resume safely.
+        Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $profile -SessionId $resumeSession
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Value @($batch.id)
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Value $baseline
+        Write-Ledger -Ledger $Ledger -StatePath $paths.State
+
         if (Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue) {
             $null = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $Ledger -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber $attemptedBatches -Attempt $nextAttempt -MaxAttempts $maxAttempts -Profile $profile -StopReason 'running'
         }
@@ -474,7 +501,11 @@ function Invoke-ImplementLoop {
             stream_partial = (Test-SddPartialStreaming)
         }
         if ($resumeSession) { $request.resume_session = $resumeSession }
+        if ($recoveringInFlight) {
+            Write-SddLog -Message "[implement] yarıda kesilmiş batch geri yükleniyor: $ids | baseline=$($baseline.Substring(0, [Math]::Min(8, $baseline.Length)))" -LogPath $logPath -Level 'warn'
+        }
         $agentResult = & $agentFn -Request $request
+        $recoveringInFlight = $false
         if ($agentResult.session_id) {
             $resumeSession = [string]$agentResult.session_id
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $resumeSession
@@ -537,6 +568,8 @@ function Invoke-ImplementLoop {
         $retryFailure = $null
         $resumeSession = '' # her başarılı batch'ten sonra temiz context
         Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $null
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Value @()
+        Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Value $null
 
         if ($ObserveEvery -gt 0 -and ($completedThisRun % $ObserveEvery) -eq 0) {
             Set-ImplementStageState -Ledger $Ledger -Status 'interrupted' -Reason 'observe_pause' -Profile $profile
