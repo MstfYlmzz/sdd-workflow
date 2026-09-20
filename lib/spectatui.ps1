@@ -154,12 +154,164 @@ function Get-SddSpectaEventsPath {
     return (Join-Path $ProjectRoot '.specify/sdd-events.json')
 }
 
+
+function Get-SddSpectaUnixMs {
+    return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+}
+
+function Get-SddSpectaActiveBaseline {
+    param([Parameter(Mandatory)] [string] $ProjectRoot)
+    $statePath = Join-Path $ProjectRoot '.sdd/state.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return '' }
+    try {
+        $ledger = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -ErrorAction Stop
+        $implement = Get-SddSpectaProperty -Object (Get-SddSpectaProperty -Object $ledger -Name 'stages') -Name 'implement'
+        return [string](Get-SddSpectaProperty -Object $implement -Name 'active_baseline' -Default '')
+    } catch { return '' }
+}
+
+function Get-SddSpectaGitDelta {
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [string] $Baseline = '',
+        [int] $MaxFiles = 10
+    )
+
+    if (-not $Baseline) { $Baseline = Get-SddSpectaActiveBaseline -ProjectRoot $ProjectRoot }
+    $empty = [pscustomobject][ordered]@{
+        baseline = $Baseline
+        changed_files = 0
+        additions = 0
+        deletions = 0
+        files = @()
+    }
+    if (-not $Baseline -or -not (Test-Path -LiteralPath (Join-Path $ProjectRoot '.git'))) { return $empty }
+
+    $rows = @()
+    try { $rows = @(& git -C $ProjectRoot diff --numstat $Baseline -- 2>$null) } catch { return $empty }
+    $items = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    $totalAdd = 0
+    $totalDel = 0
+    foreach ($line in $rows) {
+        if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
+        $parts = [string]$line -split [char]9, 3
+        if ($parts.Count -lt 3) { continue }
+        $path = [string]$parts[2]
+        if ($path -match '^(?:\.sdd|\.specify)(?:/|\\)') { continue }
+        $binary = ($parts[0] -eq '-' -or $parts[1] -eq '-')
+        $add = if ($binary) { 0 } else { [int]$parts[0] }
+        $del = if ($binary) { 0 } else { [int]$parts[1] }
+        $totalAdd += $add; $totalDel += $del
+        $seen[$path] = $true
+        $items.Add([pscustomobject][ordered]@{
+            path = $path; status = 'changed'; additions = $add; deletions = $del; binary = $binary
+        })
+    }
+
+    try {
+        foreach ($path in @(& git -C $ProjectRoot ls-files --others --exclude-standard 2>$null)) {
+            $path = [string]$path
+            if (-not $path -or $path -match '^(?:\.sdd|\.specify)(?:/|\\)' -or $seen.ContainsKey($path)) { continue }
+            $items.Add([pscustomobject][ordered]@{
+                path = $path; status = 'untracked'; additions = 0; deletions = 0; binary = $false
+            })
+        }
+    } catch { }
+
+    $ordered = @($items | Sort-Object @{Expression={ [int]$_.additions + [int]$_.deletions };Descending=$true}, path)
+    return [pscustomobject][ordered]@{
+        baseline = $Baseline
+        changed_files = $items.Count
+        additions = $totalAdd
+        deletions = $totalDel
+        files = @($ordered | Select-Object -First ([Math]::Max(1, $MaxFiles)))
+    }
+}
+
+function Update-SddSpectaRuntimeActivity {
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [object] $Event,
+        [switch] $RefreshDelta
+    )
+
+    $path = Get-SddSpectaStatusPath -ProjectRoot $ProjectRoot
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try { $doc = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    if (-not $doc.runtime) { return $null }
+
+    $nowMs = Get-SddSpectaUnixMs
+    $category = [string](Get-SddSpectaProperty -Object $Event -Name 'category' -Default '')
+    $eventType = [string](Get-SddSpectaProperty -Object $Event -Name 'event_type' -Default '')
+    $provider = [string](Get-SddSpectaProperty -Object $Event -Name 'provider' -Default '')
+    $message = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
+    $command = [string](Get-SddSpectaProperty -Object $Event -Name 'command' -Default '')
+    $status = [string](Get-SddSpectaProperty -Object $Event -Name 'status' -Default '')
+
+    $kind = [string](Get-SddSpectaProperty -Object $doc.runtime -Name 'activity_kind' -Default '')
+    $label = [string](Get-SddSpectaProperty -Object $doc.runtime -Name 'activity_label' -Default '')
+    $detail = [string](Get-SddSpectaProperty -Object $doc.runtime -Name 'activity_detail' -Default '')
+    $activityStarted = [long](Get-SddSpectaProperty -Object $doc.runtime -Name 'activity_started_at_ms' -Default 0)
+    $agentStarted = [long](Get-SddSpectaProperty -Object $doc.runtime -Name 'agent_started_at_ms' -Default 0)
+
+    $newActivity = $false
+    if ($eventType -eq 'agent_started') {
+        $kind = 'agent'; $label = $(if ($provider) { "$provider agent" } else { 'agent' }); $detail = $message
+        $activityStarted = $nowMs; $agentStarted = $nowMs; $newActivity = $true
+    } elseif ($category -eq 'command' -and $status -in @('running','started','')) {
+        $kind = 'terminal'; $label = 'terminal'; $detail = $(if ($command) { $command } else { $message })
+        $activityStarted = $nowMs; $newActivity = $true
+    } elseif ($category -eq 'gate' -or $eventType -like 'gate_*') {
+        $kind = 'test'; $label = 'validation'; $detail = $(if ($command) { $command } else { $message })
+        $activityStarted = $nowMs; $newActivity = $true
+    } elseif ($category -eq 'file_change') {
+        $kind = 'file'; $label = 'editing'; $detail = $message
+        $activityStarted = $nowMs; $newActivity = $true
+    } elseif ($category -eq 'tool' -and $status -in @('running','started','')) {
+        $kind = 'tool'; $label = 'tool'; $detail = $message
+        $activityStarted = $nowMs; $newActivity = $true
+    } elseif ($category -eq 'reasoning_summary') {
+        $kind = 'thinking'; $label = 'thinking'; $detail = $message
+        $activityStarted = $nowMs; $newActivity = $true
+    } elseif ($category -eq 'assistant') {
+        $kind = 'agent'; $label = $(if ($provider) { "$provider response" } else { 'agent response' }); $detail = $message
+        if ($eventType -ne 'agent_message_partial') { $activityStarted = $nowMs; $newActivity = $true }
+    } elseif ($eventType -eq 'agent_completed') {
+        $kind = $(if ($status -in @('failed','interrupted')) { 'error' } else { 'done' })
+        $label = $(if ($status) { "agent $status" } else { 'agent completed' }); $detail = $message
+        $activityStarted = $nowMs; $newActivity = $true
+    }
+
+    $doc.runtime | Add-Member -NotePropertyName activity_kind -NotePropertyValue $kind -Force
+    $doc.runtime | Add-Member -NotePropertyName activity_label -NotePropertyValue $label -Force
+    $doc.runtime | Add-Member -NotePropertyName activity_detail -NotePropertyValue (ConvertTo-SddSafeText -Value $detail -MaxLength 2000) -Force
+    $doc.runtime | Add-Member -NotePropertyName activity_started_at_ms -NotePropertyValue $activityStarted -Force
+    $doc.runtime | Add-Member -NotePropertyName agent_started_at_ms -NotePropertyValue $agentStarted -Force
+    $doc.runtime | Add-Member -NotePropertyName last_activity_at_ms -NotePropertyValue $nowMs -Force
+
+    if ($RefreshDelta -or $newActivity) {
+        $delta = Get-SddSpectaGitDelta -ProjectRoot $ProjectRoot
+        $doc.runtime | Add-Member -NotePropertyName active_baseline -NotePropertyValue $delta.baseline -Force
+        $doc.runtime | Add-Member -NotePropertyName changed_files -NotePropertyValue $delta.changed_files -Force
+        $doc.runtime | Add-Member -NotePropertyName additions -NotePropertyValue $delta.additions -Force
+        $doc.runtime | Add-Member -NotePropertyName deletions -NotePropertyValue $delta.deletions -Force
+        $doc.runtime | Add-Member -NotePropertyName file_changes -NotePropertyValue @($delta.files) -Force
+    }
+
+    $doc.updated_at = (Get-Date).ToUniversalTime().ToString('o')
+    $tmp = "$path.tmp"
+    $doc | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $tmp -Encoding utf8 -NoNewline
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+    return $doc.runtime
+}
+
 function Write-SddSpectaEvent {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string] $ProjectRoot,
         [Parameter(Mandatory)] [object] $Event,
-        [int] $MaxEvents = 40
+        [int] $MaxEvents = 80
     )
 
     $specifyDir = Join-Path $ProjectRoot '.specify'
@@ -245,6 +397,7 @@ function Write-SddSpectaEvent {
         severity    = [string](Get-SddSpectaProperty -Object $Event -Name 'severity' -Default 'info')
         status      = $(if ($eventType -eq 'agent_message_live') { 'running' } else { [string](Get-SddSpectaProperty -Object $Event -Name 'status' -Default '') })
         message     = $message
+        command     = [string](Get-SddSpectaProperty -Object $Event -Name 'command' -Default '')
         provider    = $provider
         exit_code   = Get-SddSpectaProperty -Object $Event -Name 'exit_code' -Default $null
         duration_ms = Get-SddSpectaProperty -Object $Event -Name 'duration_ms' -Default $null
@@ -262,6 +415,10 @@ function Write-SddSpectaEvent {
     $tmp = "$path.tmp"
     $doc | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding utf8 -NoNewline
     Move-Item -LiteralPath $tmp -Destination $path -Force
+
+    $refreshDelta = $category -in @('command','gate','file_change','tool') -or
+                    $eventType -in @('agent_started','agent_completed','agent_message')
+    $null = Update-SddSpectaRuntimeActivity -ProjectRoot $ProjectRoot -Event $Event -RefreshDelta:$refreshDelta
     return [pscustomobject]$entry
 }
 
@@ -336,6 +493,15 @@ function Write-SddSpectaStatus {
         elseif ($_.PSObject.Properties.Name -contains 'id') { [string]$_.id }
     } | Where-Object { $_ })
 
+    $priorRuntime = $null
+    $statusPath = Get-SddSpectaStatusPath -ProjectRoot $ProjectRoot
+    if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
+        try { $priorRuntime = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json -ErrorAction Stop).runtime } catch { $priorRuntime = $null }
+    }
+    $baseline = [string](Get-SddSpectaProperty -Object $stageState -Name 'active_baseline' -Default '')
+    if (-not $baseline) { $baseline = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'active_baseline' -Default '') }
+    $delta = Get-SddSpectaGitDelta -ProjectRoot $ProjectRoot -Baseline $baseline
+
     $runtime = [ordered]@{
         batch = $batchIds
         batch_number = $BatchNumber
@@ -347,6 +513,17 @@ function Write-SddSpectaStatus {
         convergence_round = [Math]::Max(0, $ConvergenceRound)
         max_convergence_rounds = [Math]::Max(0, $MaxConvergenceRounds)
         stop_reason = $StopReason
+        active_baseline = $delta.baseline
+        changed_files = $delta.changed_files
+        additions = $delta.additions
+        deletions = $delta.deletions
+        file_changes = @($delta.files)
+        activity_kind = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_kind' -Default '')
+        activity_label = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_label' -Default '')
+        activity_detail = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_detail' -Default '')
+        activity_started_at_ms = [long](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_started_at_ms' -Default 0)
+        agent_started_at_ms = [long](Get-SddSpectaProperty -Object $priorRuntime -Name 'agent_started_at_ms' -Default 0)
+        last_activity_at_ms = [long](Get-SddSpectaProperty -Object $priorRuntime -Name 'last_activity_at_ms' -Default 0)
     }
 
     $doc = [ordered]@{
