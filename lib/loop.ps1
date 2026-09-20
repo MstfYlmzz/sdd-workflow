@@ -372,7 +372,10 @@ function Invoke-ImplementLoop {
         [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Default '')
     } else { '' }
     $recoveryBaseline = if ($recoverableActiveBatch) { $activeBaseline } else { '' }
-    $recoveryBatchIds = if ($recoverableActiveBatch) { @($activeBatchIds) } else { @() }
+    # PowerShell enumerates arrays emitted by an if-expression. Wrap the whole
+    # expression so a single active task remains Object[] instead of collapsing
+    # into a scalar string (which has no .Count under StrictMode).
+    $recoveryBatchIds = @(if ($recoverableActiveBatch) { $activeBatchIds } else { @() })
     $recoveringInFlight = $recoverableActiveBatch
 
     while ($true) {
@@ -420,7 +423,7 @@ function Invoke-ImplementLoop {
             return [pscustomobject]@{ ok = $true; reason = 'completed'; batches = $attemptedBatches }
         }
 
-        if ($recoveringInFlight -and $recoveryBatchIds.Count -gt 0) {
+        if ($recoveringInFlight -and @($recoveryBatchIds).Count -gt 0) {
             $batch = @(
                 foreach ($id in $recoveryBatchIds) {
                     $match = @(Get-LedgerTasks $Ledger | Where-Object { $_.id -eq $id -and $_.status -eq 'pending' } | Select-Object -First 1)
