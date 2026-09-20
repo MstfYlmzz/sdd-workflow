@@ -140,6 +140,25 @@ try {
     Assert-True (@($eventDoc.events).Count -eq 1) 'Event feed ilk anlamlı olayı içermeli.'
     Assert-True ($eventDoc.events[0].message -eq 'Tier 1/reference-frame-tests' -and $eventDoc.events[0].status -eq 'failed') 'Event özeti UI için gerekli alanları korumalı.'
 
+    $agentStart = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:05+03:00';run_id='run-1';sequence=28;stage='implement'
+        category='agent';event_type='agent_started';severity='info';status='running'
+        message='Codex agent başladı';command='';provider='codex';exit_code=$null;duration_ms=$null
+    }
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $agentStart
+    $commandEvent = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:05+03:00';run_id='run-1';sequence=29;stage='implement'
+        category='command';event_type='command_started';severity='info';status='running'
+        message='terminal';command='node --test tests/reference-frame.test.js';provider='codex';exit_code=$null;duration_ms=$null
+    }
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $commandEvent
+    $activityDoc = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    Assert-True ($activityDoc.runtime.agent_started_at_ms -gt 0 -and $activityDoc.runtime.last_activity_at_ms -gt 0) 'Agent süre/heartbeat telemetry projectiona yazılmalı.'
+    Assert-True ($activityDoc.runtime.activity_kind -eq 'terminal' -and $activityDoc.runtime.activity_detail -match 'node --test') 'Aktif terminal işlemi runtime projectionda görünmeli.'
+    $eventDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
+    $projectedCommand = @($eventDoc.events | Where-Object event_type -eq 'command_started')[-1]
+    Assert-True ($projectedCommand.command -eq 'node --test tests/reference-frame.test.js') 'Structured command event ham output olmadan komutu korumalı.'
+
     $streamEvent = [pscustomobject]@{
         timestamp='2026-09-19T21:18:06+03:00';run_id='run-1';sequence=29;stage='implement'
         category='command_output';event_type='gate_output';severity='info';status=''
