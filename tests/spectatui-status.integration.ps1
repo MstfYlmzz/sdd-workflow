@@ -164,9 +164,10 @@ try {
         category='command_output';event_type='gate_output';severity='info';status=''
         message='raw test output';provider='';exit_code=$null;duration_ms=$null
     }
+    $beforeRawCount = @($eventDoc.events).Count
     $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $streamEvent
     $eventDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
-    Assert-True (@($eventDoc.events).Count -eq 1) 'Ham command output parsed runtime event feedini şişirmemeli.'
+    Assert-True (@($eventDoc.events).Count -eq $beforeRawCount) 'Ham command output parsed runtime event feedini şişirmemeli.'
 
     $partialEvent = [pscustomobject]@{
         timestamp='2026-09-19T21:18:07+03:00';run_id='run-1';sequence=30;stage='implement'
