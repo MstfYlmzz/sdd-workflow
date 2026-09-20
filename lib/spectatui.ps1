@@ -259,6 +259,9 @@ function Update-SddSpectaRuntimeActivity {
     if ($eventType -eq 'agent_started') {
         $kind = 'agent'; $label = $(if ($provider) { "$provider agent" } else { 'agent' }); $detail = $message
         $activityStarted = $nowMs; $agentStarted = $nowMs; $newActivity = $true
+    } elseif ($eventType -eq 'gate_command_started') {
+        $kind = 'test'; $label = 'test'; $detail = $(if ($command) { $command } else { $message })
+        $activityStarted = $nowMs; $newActivity = $true
     } elseif ($category -eq 'command' -and $status -in @('running','started','')) {
         $kind = 'terminal'; $label = 'terminal'; $detail = $(if ($command) { $command } else { $message })
         $activityStarted = $nowMs; $newActivity = $true
