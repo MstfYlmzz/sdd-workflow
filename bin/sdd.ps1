@@ -23,7 +23,7 @@ function Show-Help {
     Write-Host '  sdd config               tüm stage routinglerini sırayla ayarlar'
     Write-Host '  sdd config <stage>       yalnız verilen stage routing ayarını değiştirir'
     Write-Host '  sdd config --json        routing bilgisini makine-okunur verir'
-    Write-Host '  sdd workflow-resume      en yeni paused sdd-native runını devam ettirir'
+    Write-Host '  sdd workflow-resume      en yeni paused/failed sdd-native runını devam ettirir'
     Write-Host '  sdd recover-implement    yarıda kesilmiş eski implement WIP stateini onarır'
     Write-Host "  sdd config set <stage> -Agent A -Model M -Effort E`n"
 }
@@ -140,17 +140,17 @@ function Invoke-Sdd {
         if($Rest.Count){throw 'Kullanım: sdd workflow-resume'}
         $lines=@(& specify workflow status 2>&1)
         if($LASTEXITCODE-ne0){throw "Workflow status okunamadı: $($lines-join' | ')"}
-        $paused=@()
+        $resumable=@()
         foreach($line in $lines){
-            if([string]$line-match '^\s*●\s+([0-9a-f]+)\s+sdd-native\s+paused\s+(\S+)'){
+            if([string]$line-match '^\s*●\s+([0-9a-f]+)\s+sdd-native\s+(paused|failed)\s+(\S+)'){
                 $stamp=$null
-                try{$stamp=[DateTimeOffset]::Parse($matches[2])}catch{$stamp=[DateTimeOffset]::MinValue}
-                $paused += [pscustomobject]@{id=$matches[1];stamp=$stamp}
+                try{$stamp=[DateTimeOffset]::Parse($matches[3])}catch{$stamp=[DateTimeOffset]::MinValue}
+                $resumable += [pscustomobject]@{id=$matches[1];status=$matches[2];stamp=$stamp}
             }
         }
-        $target=@($paused|Sort-Object stamp -Descending|Select-Object -First 1)
-        if($target.Count-eq0){throw 'Resume edilebilir paused sdd-native workflow bulunamadı.'}
-        Write-Host "Paused workflow resume: $($target[0].id)" -ForegroundColor Cyan
+        $target=@($resumable|Sort-Object stamp -Descending|Select-Object -First 1)
+        if($target.Count-eq0){throw 'Resume edilebilir paused/failed sdd-native workflow bulunamadı.'}
+        Write-Host "Workflow resume: $($target[0].id) ($($target[0].status))" -ForegroundColor Cyan
         & specify workflow resume $target[0].id
         if($LASTEXITCODE-ne0){throw "Workflow resume başarısız: $($target[0].id)"}
       }
