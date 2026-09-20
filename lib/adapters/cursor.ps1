@@ -60,6 +60,9 @@ function Send-CursorToolActivity {
     $status = Get-CursorToolValue -Object $Tool -Names @('status','state')
     if (-not $status) { $status = 'running' }
     $args = Get-CursorEventValue -Object $Tool -Names @('args','arguments','input')
+    if ($args -is [string] -and -not [string]::IsNullOrWhiteSpace($args)) {
+        try { $args = $args | ConvertFrom-Json -ErrorAction Stop } catch { }
+    }
     $command = Get-CursorToolValue -Object $args -Names @('command','cmd')
     $path = Get-CursorToolValue -Object $args -Names @('file_path','path','filename','target_file')
 
