@@ -311,9 +311,13 @@ function Invoke-ImplementLoop {
 
     $previousStatus = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'status' -Default 'not_started')
     $previousReason = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'stop_reason' -Default '')
+    $activeBatchIds = @($(Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Default @()))
+    $activeBaseline = [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Default '')
     $interruptedInFlight = ($previousStatus -eq 'running' -and $previousReason -eq 'running')
+    $recoverableActiveBatch = ($activeBatchIds.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($activeBaseline) -and
+                               ($interruptedInFlight -or $previousReason -eq 'agent_interrupted'))
     $dirty = @(Get-GitStatusForTier0 -ProjectRoot $ProjectRoot)
-    $mayResumeDirty = $interruptedInFlight -or $previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')
+    $mayResumeDirty = $recoverableActiveBatch -or $previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')
     if ($dirty.Count -gt 0 -and -not $mayResumeDirty) {
         throw "Implement loop temiz çalışma ağacıyla başlamalı. Önce commit/stash yap: $($dirty -join ' | ')"
     }
@@ -350,13 +354,9 @@ function Invoke-ImplementLoop {
     $resumeSession = if ($previousReason -in @('tier0_failed','tier1_failed','agent_interrupted','circuit_breaker')) {
         [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Default '')
     } else { '' }
-    $recoveryBaseline = if ($interruptedInFlight) {
-        [string](Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Default '')
-    } else { '' }
-    $recoveryBatchIds = if ($interruptedInFlight) {
-        @($(Get-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Default @()))
-    } else { @() }
-    $recoveringInFlight = $interruptedInFlight
+    $recoveryBaseline = if ($recoverableActiveBatch) { $activeBaseline } else { '' }
+    $recoveryBatchIds = if ($recoverableActiveBatch) { @($activeBatchIds) } else { @() }
+    $recoveringInFlight = $recoverableActiveBatch
 
     while ($true) {
         $pending = @(Get-LedgerTasks $Ledger | Where-Object { $_.status -eq 'pending' })
