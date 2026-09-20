@@ -145,8 +145,14 @@ ui:
     Assert-True ($beforeHash -eq $afterHash) 'Pipeline failure authoritative SDD domain stateini değiştirmemeli.'
 
     Remove-Item -LiteralPath (Join-Path $project 'dirty.tmp') -Force
-    $resumed = Invoke-SpecifyJson -CliArgs @('workflow','resume',[string]$failed.payload.run_id)
-    Assert-True ($resumed.code -eq 0 -and $resumed.payload.status -eq 'completed') 'Workflow resume failed top-level step üzerinden tamamlanmalı.'
+    Push-Location $project
+    try {
+        & (Join-Path $shim 'sdd.ps1') workflow-resume
+        $resumeCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($resumeCode -eq 0) 'sdd workflow-resume en yeni failed sdd-native runı devam ettirmeli.'
 
     $status = Invoke-SpecifyJson -CliArgs @('workflow','status',[string]$failed.payload.run_id)
     Assert-True ($status.code -eq 0 -and $status.payload.status -eq 'completed') 'Workflow status resumed runı completed göstermeli.'
