@@ -7,12 +7,23 @@ use ratatui::Frame;
 
 use spectatui_core::speckit::SddEventSummary;
 
-use crate::app::App;
+use crate::app::{App, Pane};
 
 const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
+    let focused = app.focused_pane == Pane::SddRuntime;
+    let border_style = if focused {
+        theme.border_focused
+    } else {
+        theme.border_unfocused
+    };
+    let title_style = if focused {
+        theme.title_focused
+    } else {
+        theme.title_unfocused
+    };
     let selected_id = app
         .selected_feature()
         .map(|f| f.id.as_str())
@@ -32,20 +43,21 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         None => "SDD Runtime".to_string(),
     };
     let title = Line::from(vec![
-        Span::styled("─┤ ", theme.border_unfocused),
-        Span::styled(title_text, theme.title_unfocused),
-        Span::styled(" ├", theme.border_unfocused),
+        Span::styled("─┤ ", border_style),
+        Span::styled(title_text, title_style),
+        Span::styled(" ├", border_style),
     ]);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme.border_unfocused)
+        .border_style(border_style)
         .title(title)
         .padding(super::PANEL_PADDING);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if inner.height == 0 || inner.width == 0 {
+        app.sdd_runtime_scroll_max.set(0);
         return;
     }
 
@@ -188,7 +200,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let available = inner.height as usize;
-    if lines.len() < available {
+    if lines.len() > available {
+        lines.truncate(available);
+        app.sdd_runtime_scroll_max.set(0);
+    } else {
         let event_slots = available.saturating_sub(lines.len());
         let latest_run = app
             .project
@@ -205,16 +220,19 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 latest_run.map(|run| event.run_id == run).unwrap_or(true)
                     && matches!(event.category.as_str(), "workflow" | "error")
             })
-            .rev()
-            .take(event_slots)
             .collect();
-        for event in recent.into_iter().rev() {
-            lines.push(event_line(event, app, inner.width as usize));
-        }
-    }
 
-    if lines.len() > available {
-        lines = lines.split_off(lines.len() - available);
+        let max_scroll = recent.len().saturating_sub(event_slots);
+        app.sdd_runtime_scroll_max
+            .set(max_scroll.min(u16::MAX as usize) as u16);
+        if event_slots > 0 {
+            let back = (app.sdd_runtime_scroll as usize).min(max_scroll);
+            let end = recent.len().saturating_sub(back);
+            let start = end.saturating_sub(event_slots);
+            for event in &recent[start..end] {
+                lines.push(event_line(event, app, inner.width as usize));
+            }
+        }
     }
 
     frame.render_widget(Paragraph::new(lines).style(theme.base), inner);
