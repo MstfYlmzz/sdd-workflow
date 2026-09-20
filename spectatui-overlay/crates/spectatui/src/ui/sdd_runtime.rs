@@ -54,10 +54,14 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         let runtime = &status.runtime;
         let now = now_ms();
         let elapsed = duration_text(now.saturating_sub(runtime.agent_started_at_ms));
-        let idle = duration_text(now.saturating_sub(runtime.last_activity_at_ms));
+        let quiet_ms = now.saturating_sub(runtime.last_activity_at_ms);
+        let idle = duration_text(quiet_ms);
         let active = status.status == "running";
+        let quiet = active && runtime.last_activity_at_ms > 0 && quiet_ms >= 90_000;
 
-        let state_style = if active {
+        let state_style = if quiet {
+            theme.warn_style
+        } else if active {
             theme.accent_bold
         } else if matches!(status.status.as_str(), "failed" | "blocked" | "interrupted") {
             theme.warn_style
@@ -70,10 +74,11 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" agent ", theme.dim_style),
                 Span::styled(
                     format!(
-                        "{} / {} · {} · last {}",
+                        "{} / {} · {} · {} {}",
                         empty_as(&runtime.agent, "agent"),
                         empty_as(&runtime.model, "default"),
                         elapsed,
+                        if quiet { "quiet" } else { "last" },
                         idle
                     ),
                     state_style,
@@ -104,6 +109,16 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 )
             },
         ]));
+
+        if quiet {
+            lines.push(Line::from(vec![
+                Span::styled(" !     ", theme.warn_style),
+                Span::styled(
+                    "No structured activity for 90s+; provider may be busy or stalled.",
+                    theme.warn_style,
+                ),
+            ]));
+        }
 
         if !runtime.activity_kind.is_empty() || !runtime.activity_detail.is_empty() {
             let detail = if runtime.activity_detail.is_empty() {
