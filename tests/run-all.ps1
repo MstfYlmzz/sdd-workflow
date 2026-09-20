@@ -23,6 +23,7 @@ $tests = @(
     'agent-selection.integration.ps1',
     'analyze.integration.ps1',
     'converge.integration.ps1',
+    'convergence-loop.integration.ps1',
     'loop.integration.ps1',
     'retry.integration.ps1',
     'revalidate.integration.ps1',
