@@ -51,7 +51,7 @@ try {
 
     $completed=[ordered]@{session_id=$null;denied=[Collections.Generic.List[string]]::new();last_message=$null;usage=$null;_completed=$false;_stream_partial=$true}
     $completedParts=[Collections.Generic.List[string]]::new()
-    Read-CursorEvent '{"type":"result","result":"Detailed report\\nSDD_CONVERGE_RESULT {\\"outcome\\":\\"tasks_appended\\"}","message":{"content":[{"type":"text","text":"All tests passed."}]}}' $completed $completedParts ''
+    Read-CursorEvent '{"type":"result","result":"Detailed report\nSDD_CONVERGE_RESULT {\"outcome\":\"tasks_appended\"}","message":{"content":[{"type":"text","text":"All tests passed."}]}}' $completed $completedParts ''
     Assert-True ($completed.last_message -match 'SDD_CONVERGE_RESULT') 'Cursor result eventindeki aggregate mesaj kısa nested mesaj tarafından ezilmemeli.'
 
     Read-CursorEvent '{"type":"tool_call","data":{"callId":"c1","name":"run_terminal_cmd","status":"running","args":{"command":"node --test tests/a.test.js"}}}' $stream $parts ''
