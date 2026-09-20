@@ -48,10 +48,30 @@ pub fn draw(frame: &mut Frame, app: &App) {
 fn draw_control(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
     let mut lines = Vec::new();
+    let protected_state = app
+        .project
+        .sdd_status
+        .as_ref()
+        .map(|status| {
+            matches!(status.status.as_str(), "running" | "interrupted")
+                && matches!(status.stage.as_str(), "implement" | "converge")
+        })
+        .unwrap_or(false);
     lines.push(Line::from(vec![
         Span::styled(" Full workflow ", theme.dim_style),
-        Span::styled("[f] run  [R] resume", theme.accent_bold),
+        if protected_state {
+            Span::styled("[f] new run locked  ", theme.faint_style)
+        } else {
+            Span::styled("[f] new run  ", theme.accent_bold)
+        },
+        Span::styled("[R] resume", theme.accent_bold),
     ]));
+    if protected_state {
+        lines.push(Line::from(Span::styled(
+            "  Active implementation is protected from accidental restart.",
+            theme.warn_style,
+        )));
+    }
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("  Stage       ", theme.faint_style),
