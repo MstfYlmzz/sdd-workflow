@@ -661,7 +661,6 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
                                 .as_ref()
                                 .map(|status| {
                                     matches!(status.status.as_str(), "running" | "interrupted")
-                                        && matches!(status.stage.as_str(), "implement" | "converge")
                                 })
                                 .unwrap_or(false);
                             if !protected_state {
@@ -1163,7 +1162,6 @@ fn spawn_and_show_cli_job(app: &mut App, cli_client: &SpecifyCliClient, action: 
         .as_ref()
         .map(|status| {
             matches!(status.status.as_str(), "running" | "interrupted")
-                && matches!(status.stage.as_str(), "implement" | "converge")
         })
         .unwrap_or(false);
     if protected_new_sdd_run {
