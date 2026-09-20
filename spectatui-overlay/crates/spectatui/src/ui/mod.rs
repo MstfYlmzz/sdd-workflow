@@ -265,10 +265,10 @@ fn draw_dashboard(frame: &mut Frame, app: &App, area: Rect) {
             workflow::draw(frame, app, right[0]);
 
             if app.project.sdd_status.is_some() && right[1].height >= 18 {
-                if right[1].height >= 24 {
+                if right[1].height >= 32 {
                     let lower = Layout::vertical([
-                        Constraint::Length(8),
-                        Constraint::Length(8),
+                        Constraint::Length(12),
+                        Constraint::Length(12),
                         Constraint::Min(8),
                     ])
                     .split(right[1]);
@@ -278,8 +278,8 @@ fn draw_dashboard(frame: &mut Frame, app: &App, area: Rect) {
                     agent_output::draw(frame, app, lower[2]);
                 } else {
                     let lower = Layout::vertical([
-                        Constraint::Length(8),
-                        Constraint::Min(0),
+                        Constraint::Length(11),
+                        Constraint::Min(7),
                     ])
                     .split(right[1]);
                     sdd_runtime::draw(frame, app, lower[0]);
