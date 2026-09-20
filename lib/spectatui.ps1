@@ -345,6 +345,288 @@ function Write-SddSpectaEvent {
     $provider = [string](Get-SddSpectaProperty -Object $Event -Name 'provider' -Default '')
     $stage = [string](Get-SddSpectaProperty -Object $Event -Name 'stage' -Default '')
     $rawMessage = [string](Get-SddSpectaProperty -Object $Event -Name 'message' -Default '')
+    $rawCommand = [string](Get-SddSpectaProperty -Object $Event -Name 'command' -Default '')
+    # Some Cursor stream versions emit a generic tool heartbeat with no tool name,
+    # command or path. It carries no user-facing information and used to render as
+    # "tool  tool". Keep it in the raw telemetry/log, but omit it from the compact
+    # SpectaTUI projection.
+    if ($category -eq 'tool' -and [string]::IsNullOrWhiteSpace($rawCommand) -and
+        ([string]::IsNullOrWhiteSpace($rawMessage) -or $rawMessage.Trim() -match '^(?i:tool)
+        [string](ConvertTo-SddSafeText -Value $rawMessage -MaxLength 6000)
+    } else {
+        $rawMessage
+    }
+    $partialKey = "$runId|$provider|$stage"
+
+    if ($eventType -eq 'agent_message_partial') {
+        if (-not (Get-Variable -Scope Script -Name SddSpectaPartialBuffers -ErrorAction SilentlyContinue)) {
+            $script:SddSpectaPartialBuffers = @{}
+            $script:SddSpectaPartialLastWrite = @{}
+        }
+        $prior = if ($script:SddSpectaPartialBuffers.ContainsKey($partialKey)) { [string]$script:SddSpectaPartialBuffers[$partialKey] } else { '' }
+        $combined = $prior + $message
+        if ($combined.Length -gt 6000) { $combined = '…' + $combined.Substring($combined.Length - 5999) }
+        $script:SddSpectaPartialBuffers[$partialKey] = $combined
+
+        $now = [DateTimeOffset]::UtcNow
+        if ($script:SddSpectaPartialLastWrite.ContainsKey($partialKey)) {
+            $last = [DateTimeOffset]$script:SddSpectaPartialLastWrite[$partialKey]
+            if (($now - $last).TotalMilliseconds -lt 250) { return $null }
+        }
+        $script:SddSpectaPartialLastWrite[$partialKey] = $now
+        $eventType = 'agent_message_live'
+        $message = $combined
+    }
+
+    $path = Get-SddSpectaEventsPath -ProjectRoot $ProjectRoot
+    $existingEvents = @()
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try {
+            $existing = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+            $existingEvents = @((Get-SddSpectaProperty -Object $existing -Name 'events' -Default @()))
+        } catch {
+            $existingEvents = @()
+        }
+    }
+
+    if ($eventType -eq 'agent_message_live') {
+        $existingEvents = @($existingEvents | Where-Object {
+            -not (
+                [string](Get-SddSpectaProperty -Object $_ -Name 'event_type' -Default '') -eq 'agent_message_live' -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'run_id' -Default '') -eq $runId -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'provider' -Default '') -eq $provider -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'stage' -Default '') -eq $stage
+            )
+        })
+    } elseif ($eventType -eq 'agent_message') {
+        $existingEvents = @($existingEvents | Where-Object {
+            -not (
+                [string](Get-SddSpectaProperty -Object $_ -Name 'event_type' -Default '') -eq 'agent_message_live' -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'run_id' -Default '') -eq $runId -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'provider' -Default '') -eq $provider -and
+                [string](Get-SddSpectaProperty -Object $_ -Name 'stage' -Default '') -eq $stage
+            )
+        })
+        if (Get-Variable -Scope Script -Name SddSpectaPartialBuffers -ErrorAction SilentlyContinue) {
+            $script:SddSpectaPartialBuffers.Remove($partialKey)
+            $script:SddSpectaPartialLastWrite.Remove($partialKey)
+        }
+    }
+
+    $entry = [ordered]@{
+        timestamp   = [string](Get-SddSpectaProperty -Object $Event -Name 'timestamp' -Default ((Get-Date).ToString('o')))
+        run_id      = $runId
+        sequence    = [int](Get-SddSpectaProperty -Object $Event -Name 'sequence' -Default 0)
+        stage       = $stage
+        category    = $category
+        event_type  = $eventType
+        severity    = [string](Get-SddSpectaProperty -Object $Event -Name 'severity' -Default 'info')
+        status      = $(if ($eventType -eq 'agent_message_live') { 'running' } else { [string](Get-SddSpectaProperty -Object $Event -Name 'status' -Default '') })
+        message     = $message
+        command     = $rawCommand
+        provider    = $provider
+        exit_code   = Get-SddSpectaProperty -Object $Event -Name 'exit_code' -Default $null
+        duration_ms = Get-SddSpectaProperty -Object $Event -Name 'duration_ms' -Default $null
+    }
+
+    $limit = [Math]::Max(5, $MaxEvents)
+    $mergeReasoning = $false
+    if ($category -eq 'reasoning_summary' -and $existingEvents.Count -gt 0) {
+        $last = $existingEvents[-1]
+        $sameReasoning = (
+            [string](Get-SddSpectaProperty -Object $last -Name 'category' -Default '') -eq 'reasoning_summary' -and
+            [string](Get-SddSpectaProperty -Object $last -Name 'run_id' -Default '') -eq $runId -and
+            [string](Get-SddSpectaProperty -Object $last -Name 'provider' -Default '') -eq $provider -and
+            [string](Get-SddSpectaProperty -Object $last -Name 'stage' -Default '') -eq $stage
+        )
+        if ($sameReasoning) {
+            $priorText = [string](Get-SddSpectaProperty -Object $last -Name 'message' -Default '')
+            $nextText = $message
+            $joined = if (-not $priorText) {
+                $nextText
+            } elseif (-not $nextText) {
+                $priorText
+            } elseif ($priorText.EndsWith(' ') -or $nextText.StartsWith(' ')) {
+                $priorText + $nextText
+            } else {
+                $priorText + ' ' + $nextText
+            }
+            if ($joined.Length -gt 6000) { $joined = '…' + $joined.Substring($joined.Length - 5999) }
+            $last.message = $joined
+            $last.timestamp = $entry.timestamp
+            $last.sequence = $entry.sequence
+            $mergeReasoning = $true
+        }
+    }
+    $events = if ($mergeReasoning) {
+        @($existingEvents | Select-Object -Last $limit)
+    } else {
+        @($existingEvents + [pscustomobject]$entry | Select-Object -Last $limit)
+    }
+    $doc = [ordered]@{
+        schema_version = 1
+        authoritative = $false
+        updated_at = (Get-Date).ToUniversalTime().ToString('o')
+        events = $events
+    }
+
+    $tmp = "$path.tmp"
+    $doc | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding utf8 -NoNewline
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+
+    $refreshDelta = $category -eq 'file_change' -or
+                    $eventType -in @('agent_completed','gate_completed')
+    $null = Update-SddSpectaRuntimeActivity -ProjectRoot $ProjectRoot -Event $Event -RefreshDelta:$refreshDelta
+    return [pscustomobject]$entry
+}
+
+function Write-SddSpectaStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [Parameter(Mandatory)] [object] $Ledger,
+        [string] $Stage = '',
+        [string] $Status = '',
+        [object[]] $Batch = @(),
+        [int] $BatchNumber = 0,
+        [int] $Attempt = 0,
+        [int] $MaxAttempts = 0,
+        [object] $Profile,
+        [int] $ConvergenceRound = -1,
+        [int] $MaxConvergenceRounds = -1,
+        [string] $StopReason = '',
+        [object] $Usage
+    )
+
+    $specifyDir = Join-Path $ProjectRoot '.specify'
+    if (-not (Test-Path -LiteralPath $specifyDir -PathType Container)) { return $null }
+
+    $config = $null
+    $configPath = Join-Path $ProjectRoot '.sdd/config.yaml'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try { $config = Read-SddConfig -ConfigPath $configPath } catch { $config = $null }
+    }
+
+    if (-not $Stage) { $Stage = Get-SddSpectaStage -Ledger $Ledger }
+    $stageState = Get-SddSpectaProperty -Object $Ledger.stages -Name $Stage
+    if (-not $Status) {
+        $Status = [string](Get-SddSpectaProperty -Object $stageState -Name 'status' -Default 'not_started')
+    }
+    if (-not $StopReason) {
+        $StopReason = [string](Get-SddSpectaProperty -Object $stageState -Name 'stop_reason' -Default '')
+    }
+
+    if (-not $Profile -and $stageState) {
+        $agent = [string](Get-SddSpectaProperty -Object $stageState -Name 'agent' -Default '')
+        $model = [string](Get-SddSpectaProperty -Object $stageState -Name 'model' -Default '')
+        $effort = [string](Get-SddSpectaProperty -Object $stageState -Name 'effort' -Default '')
+        if ($agent -or $model -or $effort) {
+            $Profile = [pscustomobject]@{agent=$agent;model=$model;effort=$effort}
+        }
+    }
+
+    if ($MaxAttempts -le 0 -and $config) {
+        $MaxAttempts = [int](Get-SddSpectaProperty -Object $config.loop -Name 'max_attempts' -Default 0)
+    }
+    $convergeState = Get-SddSpectaProperty -Object $Ledger.stages -Name 'converge'
+    if ($ConvergenceRound -lt 0) {
+        $ConvergenceRound = [int](Get-SddSpectaProperty -Object $convergeState -Name 'round' -Default 0)
+    }
+    if ($MaxConvergenceRounds -lt 0 -and $config) {
+        $MaxConvergenceRounds = [int](Get-SddSpectaProperty -Object $config.loop -Name 'max_converge_rounds' -Default 0)
+    }
+    if ($MaxConvergenceRounds -lt 0) { $MaxConvergenceRounds = 0 }
+
+    $tasks = @(Get-LedgerTasks $Ledger)
+    $counts = [ordered]@{
+        total   = $tasks.Count
+        done    = @($tasks | Where-Object status -eq 'done').Count
+        pending = @($tasks | Where-Object status -eq 'pending').Count
+        blocked = @($tasks | Where-Object status -eq 'blocked').Count
+        manual  = @($tasks | Where-Object status -eq 'manual').Count
+    }
+
+    $batchIds = @($Batch | ForEach-Object {
+        if ($_ -is [string]) { [string]$_ }
+        elseif ($_.PSObject.Properties.Name -contains 'id') { [string]$_.id }
+    } | Where-Object { $_ })
+
+    $priorRuntime = $null
+    $statusPath = Get-SddSpectaStatusPath -ProjectRoot $ProjectRoot
+    if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
+        try { $priorRuntime = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json -ErrorAction Stop).runtime } catch { $priorRuntime = $null }
+    }
+    $baseline = [string](Get-SddSpectaProperty -Object $stageState -Name 'active_baseline' -Default '')
+    if (-not $baseline) { $baseline = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'active_baseline' -Default '') }
+    $delta = Get-SddSpectaGitDelta -ProjectRoot $ProjectRoot -Baseline $baseline
+
+    $runtime = [ordered]@{
+        batch = $batchIds
+        batch_number = $BatchNumber
+        attempt = $Attempt
+        max_attempts = $MaxAttempts
+        agent = [string](Get-SddSpectaProperty -Object $Profile -Name 'agent' -Default '')
+        model = [string](Get-SddSpectaProperty -Object $Profile -Name 'model' -Default '')
+        effort = [string](Get-SddSpectaProperty -Object $Profile -Name 'effort' -Default '')
+        convergence_round = [Math]::Max(0, $ConvergenceRound)
+        max_convergence_rounds = [Math]::Max(0, $MaxConvergenceRounds)
+        stop_reason = $StopReason
+        active_baseline = $delta.baseline
+        changed_files = $delta.changed_files
+        additions = $delta.additions
+        deletions = $delta.deletions
+        file_changes = @($delta.files)
+        activity_kind = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_kind' -Default '')
+        activity_label = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_label' -Default '')
+        activity_detail = [string](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_detail' -Default '')
+        activity_started_at_ms = [long](Get-SddSpectaProperty -Object $priorRuntime -Name 'activity_started_at_ms' -Default 0)
+        agent_started_at_ms = [long](Get-SddSpectaProperty -Object $priorRuntime -Name 'agent_started_at_ms' -Default 0)
+        last_activity_at_ms = [long](Get-SddSpectaProperty -Object $priorRuntime -Name 'last_activity_at_ms' -Default 0)
+    }
+
+    $doc = [ordered]@{
+        schema_version = 1
+        authoritative = $false
+        spec_id = Get-SddSpectaSpecId -ProjectRoot $ProjectRoot -Ledger $Ledger
+        stage = $Stage
+        status = $Status
+        updated_at = (Get-Date).ToUniversalTime().ToString('o')
+        tasks = $counts
+        runtime = $runtime
+    }
+    if ($null -ne $Usage) { $doc.usage = $Usage }
+
+    $path = Get-SddSpectaStatusPath -ProjectRoot $ProjectRoot
+    $tmp = "$path.tmp"
+    $json = $doc | ConvertTo-Json -Depth 10
+    Set-Content -LiteralPath $tmp -Value $json -Encoding utf8 -NoNewline
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+    return [pscustomobject]$doc
+}
+
+function Sync-SddSpectaStatusFromDisk {
+    param(
+        [Parameter(Mandatory)] [string] $ProjectRoot,
+        [string] $Stage = '',
+        [string] $Status = ''
+    )
+    if (-not (Get-Command Read-Ledger -ErrorAction SilentlyContinue)) { return $null }
+    $statePath = Join-Path $ProjectRoot '.sdd/state.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return $null }
+    try {
+        $ledger = Read-Ledger -StatePath $statePath
+        $statusDoc = Write-SddSpectaStatus -ProjectRoot $ProjectRoot -Ledger $ledger -Stage $Stage -Status $Status
+        if (Get-Command Write-SddSpectaConfig -ErrorAction SilentlyContinue) {
+            $null = Write-SddSpectaConfig -ProjectRoot $ProjectRoot
+        }
+        return $statusDoc
+    } catch {
+        return $null
+    }
+}
+)) {
+        return $null
+    }
     $message = if (Get-Command ConvertTo-SddSafeText -ErrorAction SilentlyContinue) {
         [string](ConvertTo-SddSafeText -Value $rawMessage -MaxLength 6000)
     } else {
