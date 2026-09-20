@@ -1154,6 +1154,25 @@ fn is_sdd_background_action(app: &App, action: &CliAction) -> bool {
 }
 
 fn spawn_and_show_cli_job(app: &mut App, cli_client: &SpecifyCliClient, action: &CliAction) {
+    let protected_new_sdd_run = matches!(
+        action,
+        CliAction::WorkflowRun { source } if source == "sdd-native"
+    ) && app
+        .project
+        .sdd_status
+        .as_ref()
+        .map(|status| {
+            matches!(status.status.as_str(), "running" | "interrupted")
+                && matches!(status.stage.as_str(), "implement" | "converge")
+        })
+        .unwrap_or(false);
+    if protected_new_sdd_run {
+        // Central safety net: the workflow manager and command palette must not be
+        // able to bypass the SDD control panel's run/resume protection.
+        app.open_popup(PopupKind::SddControl);
+        return;
+    }
+
     if !app.can_start_cli_action() {
         app.active_popup = Some(PopupKind::CliOutput);
         return;
