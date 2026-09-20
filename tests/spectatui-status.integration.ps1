@@ -191,6 +191,32 @@ try {
     Assert-True (@($finalAgentDoc.events | Where-Object event_type -eq 'agent_message_live').Count -eq 0) 'Final agent mesajı canlı partial kaydını temizlemeli.'
     Assert-True (@($finalAgentDoc.events | Where-Object { $_.event_type -eq 'agent_message' -and $_.message -eq 'Hello world' }).Count -eq 1) 'Parsed Agent Output final mesajı korumalı.'
 
+    $think1 = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:08+03:00';run_id='run-1';sequence=40;stage='implement'
+        category='reasoning_summary';event_type='reasoning';severity='info';status=''
+        message='The full build is';command='';provider='cursor';exit_code=$null;duration_ms=$null
+    }
+    $think2 = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:09+03:00';run_id='run-1';sequence=41;stage='implement'
+        category='reasoning_summary';event_type='reasoning';severity='info';status=''
+        message='estimated at roughly 100 minutes.';command='';provider='cursor';exit_code=$null;duration_ms=$null
+    }
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $think1
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $think2
+    $thinkDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
+    $thinkRows = @($thinkDoc.events | Where-Object category -eq 'reasoning_summary')
+    Assert-True ($thinkRows.Count -eq 1 -and $thinkRows[0].message -eq 'The full build is estimated at roughly 100 minutes.') 'Ardışık Cursor think parçaları tek okunabilir reasoning satırında birleşmeli.'
+
+    $genericTool = [pscustomobject]@{
+        timestamp='2026-09-19T21:18:10+03:00';run_id='run-1';sequence=42;stage='implement'
+        category='tool';event_type='tool_activity';severity='info';status='running'
+        message='tool';command='';provider='cursor';exit_code=$null;duration_ms=$null
+    }
+    $beforeToolCount = @($thinkDoc.events).Count
+    $null = Write-SddSpectaEvent -ProjectRoot $fixture -Event $genericTool
+    $toolDoc = Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json
+    Assert-True (@($toolDoc.events).Count -eq $beforeToolCount) 'İsimsiz generic Cursor tool heartbeat Activity panelini tool/tool satırıyla kirletmemeli.'
+
     $ledger.stages.implement.status = 'interrupted'
     Write-Ledger -Ledger $ledger -StatePath $statePath
     $null = Sync-SddSpectaStatusFromDisk -ProjectRoot $fixture
