@@ -322,6 +322,23 @@ function Invoke-ImplementLoop {
         throw "Implement loop temiz çalışma ağacıyla başlamalı. Önce commit/stash yap: $($dirty -join ' | ')"
     }
 
+    # If an external provider finished and committed the active batch but the
+    # orchestrator died before validation/checkpointing, prefer validating that
+    # existing candidate over asking the provider to implement the same work again.
+    $autoRevalidateCandidate = $false
+    if (-not $RevalidateFrom -and $recoverableActiveBatch -and $dirty.Count -eq 0) {
+        $headNow = Get-GitBaseline -ProjectRoot $ProjectRoot
+        if ($headNow -and $headNow -ne $activeBaseline) {
+            $ancestor = Invoke-GitCapture -ProjectRoot $ProjectRoot -Arguments @('merge-base','--is-ancestor',$activeBaseline,$headNow) -AllowFailure
+            if ($ancestor.ExitCode -eq 0) {
+                $RevalidateFrom = $activeBaseline
+                $CandidateCommit = $headNow
+                $autoRevalidateCandidate = $true
+                Write-SddLog -Message "[implement] yarıda kalan batch için mevcut candidate bulundu; agent tekrar çağrılmadan doğrulanacak: $($headNow.Substring(0,8))" -LogPath $logPath -Level 'warn'
+            }
+        }
+    }
+
     # Validator recovery agentsız kalmalıdır. Normal implement girişinde ise
     # analyze otomatik ve read-only çalışır; kritik eşik loop'u durdurur.
     if (-not $RevalidateFrom) {
@@ -463,6 +480,11 @@ function Invoke-ImplementLoop {
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'consecutive_failures' -Value 0
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'last_error' -Value $null
             Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'session_id' -Value $null
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_batch' -Value @()
+            Set-WorkflowProperty -Object $Ledger.stages.implement -Name 'active_baseline' -Value $null
+            $recoveringInFlight = $false
+            $recoveryBatchIds = @()
+            $recoveryBaseline = ''
             Set-ImplementStageState -Ledger $Ledger -Status 'running' -Reason 'running' -Profile $baseProfile
             $null = Save-LoopCheckpoint -Ledger $Ledger -ProjectRoot $ProjectRoot -TasksMdPath $tasksMdPath -Message "sdd: revalidate tasks $ids"
             Write-SddLog -Message "[implement] yeniden doğrulama geçti: $ids @ $($candidateSha.Substring(0, 8))" -LogPath $logPath -Level 'info'
