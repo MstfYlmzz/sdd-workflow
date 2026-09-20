@@ -2,7 +2,7 @@
 <# SDD workflow komut satırı giriş noktası.
    Argümanlar bilerek PowerShell parameter binder'a bırakılmaz. Global shim'den
    aktarılan çok satırlı -Prompt değeri Object[] olabilir. #>
-$supportedCommands=@('init','upgrade','self-update','spectatui','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage')
+$supportedCommands=@('init','upgrade','self-update','spectatui','spec','plan','tasks','analyze','implement','converge','status','config','tui','sync-tasks','workflow-stage','workflow-resume','recover-implement')
 $Command=if($args.Count){[string]$args[0]}else{''}
 $Rest=@(if($args.Count-gt1){$args[1..($args.Count-1)]})
 if($Command-and$Command-notin$supportedCommands){throw "Bilinmeyen SDD komutu: $Command"}
@@ -23,6 +23,8 @@ function Show-Help {
     Write-Host '  sdd config               tüm stage routinglerini sırayla ayarlar'
     Write-Host '  sdd config <stage>       yalnız verilen stage routing ayarını değiştirir'
     Write-Host '  sdd config --json        routing bilgisini makine-okunur verir'
+    Write-Host '  sdd workflow-resume      en yeni paused sdd-native runını devam ettirir'
+    Write-Host '  sdd recover-implement    yarıda kesilmiş eski implement WIP stateini onarır'
     Write-Host "  sdd config set <stage> -Agent A -Model M -Effort E`n"
 }
 function Get-CommonArguments {
@@ -134,6 +136,48 @@ function Invoke-Sdd {
       }
       'sync-tasks'{$L=Read-Ledger $paths.State;$fd=Get-FeatureDirectory $root;if(-not$fd){throw '.specify/feature.json yok.'};$tm=Join-Path $fd 'tasks.md';$L=Import-TasksToLedger $L $tm;Write-Ledger $L $paths.State;Write-Host "`n$(@(Get-LedgerTasks $L).Count) task ledger'a yüklendi." -ForegroundColor Green;Show-LedgerStatus $paths.State}
       'workflow-stage'{$stage=if($Rest.Count-eq1){[string]$Rest[0]}else{''};if($stage-notin@('prepare','analyze','closure')){throw 'Kullanım: sdd workflow-stage prepare|analyze|closure'};$wr=Invoke-SddWorkflowStep -ProjectRoot $root -Step $stage -UiMode raw;if($wr.pause){exit 75}}
+      'workflow-resume'{
+        if($Rest.Count){throw 'Kullanım: sdd workflow-resume'}
+        $lines=@(& specify workflow status 2>&1)
+        if($LASTEXITCODE-ne0){throw "Workflow status okunamadı: $($lines-join' | ')"}
+        $paused=@()
+        foreach($line in $lines){
+            if([string]$line-match '^\s*●\s+([0-9a-f]+)\s+sdd-native\s+paused\s+(\S+)'){
+                $stamp=$null
+                try{$stamp=[DateTimeOffset]::Parse($matches[2])}catch{$stamp=[DateTimeOffset]::MinValue}
+                $paused += [pscustomobject]@{id=$matches[1];stamp=$stamp}
+            }
+        }
+        $target=@($paused|Sort-Object stamp -Descending|Select-Object -First 1)
+        if($target.Count-eq0){throw 'Resume edilebilir paused sdd-native workflow bulunamadı.'}
+        Write-Host "Paused workflow resume: $($target[0].id)" -ForegroundColor Cyan
+        & specify workflow resume $target[0].id
+        if($LASTEXITCODE-ne0){throw "Workflow resume başarısız: $($target[0].id)"}
+      }
+      'recover-implement'{
+        if($Rest.Count){throw 'Kullanım: sdd recover-implement'}
+        $cfg=Read-SddConfig $paths.Config
+        $L=Read-Ledger $paths.State
+        $stage=$L.stages.implement
+        $status=[string](Get-WorkflowProperty -Object $stage -Name 'status' -Default 'not_started')
+        if($status-notin@('not_started','running')){throw "Implement recovery yalnız not_started/running durumda kullanılabilir; mevcut=$status"}
+        $dirty=@(Get-GitStatusForTier0 -ProjectRoot $root)
+        if($dirty.Count-eq0){throw 'Recovery için implement WIP bulunamadı; çalışma ağacı temiz.'}
+        $batchSize=[Math]::Max(1,[int](Get-WorkflowProperty -Object $cfg.loop -Name 'batch_size' -Default 4))
+        $batch=@(Get-PendingBatch -Ledger $L -BatchSize $batchSize)
+        if($batch.Count-eq0){throw 'Recovery için pending implement batch bulunamadı.'}
+        $baseline=Get-GitBaseline -ProjectRoot $root
+        $profile=$cfg.agents.implement
+        Set-ImplementStageState -Ledger $L -Status 'running' -Reason 'running' -Profile $profile
+        Set-WorkflowProperty -Object $stage -Name 'active_batch' -Value @($batch.id)
+        Set-WorkflowProperty -Object $stage -Name 'active_baseline' -Value $baseline
+        Set-WorkflowProperty -Object $stage -Name 'last_error' -Value 'Recovered after an external interruption before the in-flight checkpoint was persisted.'
+        Write-Ledger -Ledger $L -StatePath $paths.State
+        if(Get-Command Write-SddSpectaStatus -ErrorAction SilentlyContinue){
+            $null=Write-SddSpectaStatus -ProjectRoot $root -Ledger $L -Stage 'implement' -Status 'running' -Batch $batch -BatchNumber 1 -Attempt 1 -Profile $profile -StopReason 'running'
+        }
+        Write-Host "Implement recovery hazır: $(@($batch.id)-join', ') | baseline=$($baseline.Substring(0,[Math]::Min(8,$baseline.Length)))" -ForegroundColor Green
+      }
       {$_-in@('spec','plan','tasks')}{
         $o=Get-CommonArguments $Rest;$cfg=Read-SddConfig $paths.Config;$L=Read-Ledger $paths.State;$profile=Get-CommandProfile $cfg $Command $o $paths.Config
         $stageArgs='';$prompt='';$resume=$false;$a=@($o.remaining);for($i=0;$i-lt$a.Count;$i++){switch -Regex([string]$a[$i]){'^-Prompt$'{if(++$i-ge$a.Count){throw '-Prompt için değer gerekli.'};$prompt=if($a[$i]-is[Array]){@($a[$i]|ForEach-Object{[string]$_})-join[Environment]::NewLine}else{[string]$a[$i]};continue};'^-Resume$'{$resume=$true;continue};default{$stageArgs=(@($stageArgs,[string]$a[$i])|Where-Object{$_})-join' '}}}
