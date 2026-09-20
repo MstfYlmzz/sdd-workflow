@@ -1070,8 +1070,14 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent, _cli_client: &SpecifyCliCl
     match key.code {
         KeyCode::Tab => app.cycle_tab_forward(),
         KeyCode::BackTab => app.cycle_tab_backward(),
-        KeyCode::Up | KeyCode::Char('k') => app.select_prev_feature(),
-        KeyCode::Down | KeyCode::Char('j') => app.select_next_feature(),
+        KeyCode::Up | KeyCode::Char('k') => match app.focused_pane {
+            Pane::SddRuntime | Pane::SddActivity => app.sdd_scroll_older(),
+            _ => app.select_prev_feature(),
+        },
+        KeyCode::Down | KeyCode::Char('j') => match app.focused_pane {
+            Pane::SddRuntime | Pane::SddActivity => app.sdd_scroll_newer(),
+            _ => app.select_next_feature(),
+        },
         KeyCode::Enter if app.focused_pane == Pane::AgentOutput && app.tmux_session.is_none() => {
             app.launch_request = true;
         }
@@ -1379,6 +1385,11 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, cli_client: &SpecifyCliClient)
             if app.resize_drag.is_some() {
                 return;
             }
+            if app.active_popup.is_none() && app.palette.is_none() {
+                if let Some(ClickAction::FocusPane(pane)) = app.hit_test(mouse.column, mouse.row) {
+                    app.focused_pane = pane;
+                }
+            }
             handle_key(
                 app,
                 KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
@@ -1388,6 +1399,11 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, cli_client: &SpecifyCliClient)
         MouseEventKind::ScrollUp => {
             if app.resize_drag.is_some() {
                 return;
+            }
+            if app.active_popup.is_none() && app.palette.is_none() {
+                if let Some(ClickAction::FocusPane(pane)) = app.hit_test(mouse.column, mouse.row) {
+                    app.focused_pane = pane;
+                }
             }
             handle_key(
                 app,
