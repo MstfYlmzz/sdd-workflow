@@ -125,6 +125,7 @@ pub enum CliAction {
     WorkflowResume {
         run_id: String,
     },
+    SddWorkflowResume,
     WorkflowStatus {
         run_id: Option<String>,
     },
@@ -167,6 +168,7 @@ impl CliAction {
                 | Self::WorkflowAdd { .. }
                 | Self::WorkflowRemove { .. }
                 | Self::WorkflowRun { .. }
+                | Self::SddWorkflowResume
                 | Self::SddStageRun { .. }
                 | Self::SddConfigSet { .. }
                 | Self::SelfUpgrade
@@ -324,6 +326,7 @@ impl CliAction {
             Self::WorkflowResume { run_id } => {
                 format!("specify workflow resume {run_id}")
             }
+            Self::SddWorkflowResume => "sdd workflow-resume".to_string(),
             Self::WorkflowStatus { run_id } => {
                 let mut cmd = "specify workflow status".to_string();
                 if let Some(id) = run_id {
@@ -537,6 +540,10 @@ mod tests {
             }
             .to_command_line(),
             "sdd analyze -Ui raw"
+        );
+        assert_eq!(
+            CliAction::SddWorkflowResume.to_command_line(),
+            "sdd workflow-resume"
         );
         assert_eq!(
             CliAction::SddConfigSet {
