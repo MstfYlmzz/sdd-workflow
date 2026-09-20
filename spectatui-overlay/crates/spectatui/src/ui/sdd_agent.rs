@@ -146,12 +146,15 @@ fn event_line(event: &SddEventSummary, app: &App, width: usize) -> Line<'static>
             single_line(&event.message),
             theme.dim_style,
         ),
-        "command" => (
-            if failed { "✗" } else if completed { "✓" } else { "▸" },
-            "terminal",
-            single_line(if event.command.is_empty() { &event.message } else { &event.command }),
-            if failed { theme.warn_style } else if running { theme.accent_style } else { theme.dim_style },
-        ),
+        "command" => {
+            let is_test = event.event_type == "gate_command_started";
+            (
+                if failed { "✗" } else if completed { "✓" } else if is_test { "▷" } else { "▸" },
+                if is_test { "test" } else { "terminal" },
+                single_line(if event.command.is_empty() { &event.message } else { &event.command }),
+                if failed { theme.warn_style } else if running { theme.accent_style } else { theme.dim_style },
+            )
+        },
         "file_change" => (
             "Δ",
             "file",
