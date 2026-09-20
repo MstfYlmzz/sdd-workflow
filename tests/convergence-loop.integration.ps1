@@ -78,7 +78,7 @@ try{
     Assert-True ($r.ok-and$r.reason-eq'completed') 'Closure tamamlanmalı.'
     Assert-True (($script:timeline -join '|')-eq'converge:1|implement:T002|converge:2') 'Converge task eklerse implement araya girmeden converge tekrar çalışmamalı.'
     Assert-True (@(Get-LedgerTasks $ledger).Count-eq2) 'Task toplamı convergence sonrası kalıcı 2 olmalı.'
-    Assert-True (@(Get-LedgerTasks $ledger|Where-Object status -eq'done').Count-eq2) 'Yeni convergence task done olmalı.'
+    Assert-True (@(Get-LedgerTasks $ledger | Where-Object status -eq 'done').Count -eq 2) 'Yeni convergence task done olmalı.'
     Assert-True ($ledger.stages.converge.status-eq'completed'-and$ledger.stages.converge.round-eq2) 'İkinci converge turu clean bitmeli.'
     Write-Host 'CONVERGENCE LOOP INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}
