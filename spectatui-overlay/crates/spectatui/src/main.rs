@@ -652,19 +652,11 @@ fn handle_key(app: &mut App, key: KeyEvent, cli_client: &SpecifyCliClient) {
                             );
                         }
                         KeyCode::Char('R') => {
-                            let run_id = app
-                                .project
-                                .workflows
-                                .iter()
-                                .find(|wf| wf.id == "sdd-native")
-                                .and_then(|wf| wf.last_run.clone());
-                            if let Some(run_id) = run_id {
-                                spawn_and_show_cli_job(
-                                    app,
-                                    cli_client,
-                                    &CliAction::WorkflowResume { run_id },
-                                );
-                            }
+                            spawn_and_show_cli_job(
+                                app,
+                                cli_client,
+                                &CliAction::SddWorkflowResume,
+                            );
                         }
                         _ => {}
                     }
@@ -1129,6 +1121,7 @@ fn request_cli_action(app: &mut App, action: CliAction, cli_client: &SpecifyCliC
 fn is_sdd_background_action(app: &App, action: &CliAction) -> bool {
     match action {
         CliAction::WorkflowRun { source } => source == "sdd-native",
+        CliAction::SddWorkflowResume => true,
         CliAction::WorkflowResume { run_id } => app.project.workflows.iter().any(|wf| {
             wf.id == "sdd-native" && wf.last_run.as_deref() == Some(run_id.as_str())
         }),
