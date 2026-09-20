@@ -20,5 +20,22 @@ try{
   $r=Invoke-Converge -Config $cfg -Ledger $ledger -ProjectRoot $fixture;Assert-True ($r.ok-and$r.outcome-eq'tasks_appended'-and$r.tasks_appended-eq1) 'Converge yeni taskları içe aktarmalı.';Assert-True (@(Get-LedgerTasks $ledger|Where-Object { $_.id -eq 'T002' }).Count-eq1) 'T002 ledgerda olmalı.'
   $script:mode='clean';$r2=Invoke-Converge -Config $cfg -Ledger $ledger -ProjectRoot $fixture;Assert-True ($r2.ok-and$r2.outcome-eq'converged') 'Değişiklik yoksa converge tamamlanmalı.'
   $bad=Test-ConvergeAppend -Before "a`n- [ ] T009 old" -After "changed`n## Phase 2: Convergence`n- [ ] T010 new";Assert-True (-not$bad.ok) 'Mevcut içerik rewrite edilirse reddedilmeli.'
+
+  $payload=Get-ConvergeResultPayload -Text 'prefix SDD_CONVERGE_RESULT {"outcome":"tasks_appended","tasks_appended":1,"summary":"gap"}Both background checks finished.'
+  Assert-True ($payload -match '"outcome":"tasks_appended"') 'Converge contract JSON trailing provider text olsa da çıkarılmalı.'
+
+  Add-Content $script:tasksPath "`n## Phase 3: Convergence`n`n- [ ] T003 Recover parser gap in ``src/app.txt```n"
+  $ledger.stages.converge.status='interrupted'
+  $ledger.stages.converge.round=2
+  $ledger.stages.converge | Add-Member -NotePropertyName stop_reason -NotePropertyValue 'contract_missing' -Force
+  $ledger.stages.implement.status='interrupted'
+  $ledger.stages.implement | Add-Member -NotePropertyName stop_reason -NotePropertyValue 'contract_missing' -Force
+  Set-Content (Join-Path $fixture '.sdd/logs/converge.log') '[AI:completed] summary SDD_CONVERGE_RESULT {"outcome":"tasks_appended","tasks_appended":1,"summary":"recover T003"}Both background checks finished.'
+  $recovered=Try-RecoverConvergeContract -Ledger $ledger -ProjectRoot $fixture -TasksPath $script:tasksPath -Profile $cfg.agents.converge -LogPath (Join-Path $fixture '.sdd/logs/converge.log')
+  Assert-True ($recovered.ok-and$recovered.recovered-and$recovered.outcome-eq'tasks_appended') 'contract_missing append aynı round içinde provider tekrar çağrılmadan recover edilmeli.'
+  Assert-True ($recovered.round-eq2-and$ledger.stages.converge.round-eq2) 'Contract recovery yeni converge round tüketmemeli.'
+  Assert-True (@(Get-LedgerTasks $ledger|Where-Object { $_.id -eq 'T003' }).Count-eq1) 'Recovered convergence task ledgera alınmalı.'
+  Assert-True (@(Get-GitStatusForTier0 -ProjectRoot $fixture).Count-eq0) 'Recovered append checkpoint sonrası working tree temiz olmalı.'
+
   Write-Host 'CONVERGE INTEGRATION OK' -ForegroundColor Green
 }finally{if(Test-Path $fixture){Remove-Item $fixture -Recurse -Force}}
