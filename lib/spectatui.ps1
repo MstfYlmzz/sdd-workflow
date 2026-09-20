@@ -294,7 +294,7 @@ function Update-SddSpectaRuntimeActivity {
     $doc.runtime | Add-Member -NotePropertyName last_activity_at_ms -NotePropertyValue $nowMs -Force
 
     # Git delta calculation can be expensive for vendor-heavy repos. Activity itself
-    # is written immediately, while diff stats are sampled at most once every 2s
+    # is written immediately, while diff stats are sampled at most once every 3s
     # (agent completion always forces a final sample).
     $shouldRefreshDelta = [bool]$RefreshDelta
     if ($shouldRefreshDelta) {
@@ -305,7 +305,7 @@ function Update-SddSpectaRuntimeActivity {
             [long]$script:SddSpectaLastDeltaAt[$ProjectRoot]
         } else { 0 }
         $forceFinal = ($eventType -eq 'agent_completed')
-        if (-not $forceFinal -and ($nowMs - $lastDelta) -lt 2000) {
+        if (-not $forceFinal -and ($nowMs - $lastDelta) -lt 3000) {
             $shouldRefreshDelta = $false
         }
     }
@@ -437,7 +437,7 @@ function Write-SddSpectaEvent {
     Move-Item -LiteralPath $tmp -Destination $path -Force
 
     $refreshDelta = $category -eq 'file_change' -or
-                    $eventType -in @('agent_started','agent_completed','agent_message','gate_completed')
+                    $eventType -in @('agent_completed','gate_completed')
     $null = Update-SddSpectaRuntimeActivity -ProjectRoot $ProjectRoot -Event $Event -RefreshDelta:$refreshDelta
     return [pscustomobject]$entry
 }
